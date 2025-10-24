@@ -1,0 +1,60 @@
+header{
+    text-align: center;
+    justify-content: center;
+    align-content: center;
+}
+body{
+    background-color: aliceblue;
+}
+
+body {
+  font-family: "Montserrat", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 100%;
+  font-style: normal;
+}
+.kontakt{
+   
+    width: 600px;
+    margin: 50px auto;
+    margin-top: 50px;
+    border-radius: 10px;
+    border: 1px solid;
+    padding-left: 10px;
+    font-size: 17px;
+    
+}
+.kontakt p {
+    display: grid;
+    grid-template-columns: 220px 1fr; 
+    gap: .4rem 1rem;  
+}
+.KontTitle{
+    text-align: center;
+}
+.projInfo{
+    width: 600px;
+    margin: 50px auto;
+    margin-top: 50px;
+    border-radius: 10px;
+    border: 1px solid;
+    padding-left: 10px;
+    font-size: 17px;
+}
+.projInfo li,a {
+    padding-top: 20px;
+    margin-left: 30px;
+    font-style: italic;
+}
+a {
+    color: #007bff;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+a:hover {
+  color: #0056b3;        
+  text-decoration: underline; 
+}
+a:active {
+  color: #003d80;     
+}
