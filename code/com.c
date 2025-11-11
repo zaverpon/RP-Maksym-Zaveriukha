@@ -6,23 +6,27 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <stdio.h>
+#include <string.h>     // memset
 #include <semaphore.h>
 #include <unistd.h>
-
-/*****************************************************************************
-* Local preprocessor defines
-******************************************************************************/
 
 /*****************************************************************************
 * Local typedefs
 ******************************************************************************/
 
+typedef struct {
+    int nr_proc;        // total number of processes (including server)
+    int next_rank;      // counter for assigning ranks
+    int live_count;     // number of active processes
+    sem_t reg_sem;      // protects registration (next_rank)
+    sem_t ready_sem;    // used to signal clients that rank is assigned
+} Control;
+
 /*****************************************************************************
 * Local variables
 ******************************************************************************/
 
-int *shared_counter = NULL; //process counter for issuing rank
-sem_t *shared_sem = NULL; //shared semaphore for synchronization
+static Control *ctl = NULL;    // shared control structure
 
 /* --------------------------------------------------------------------------
    Support function for creating shared memory
@@ -40,10 +44,6 @@ static void *create_shared_region(size_t size)
     }
     return region;
 }
-
-/*****************************************************************************
-* Implementation of functions
-******************************************************************************/
 
 /*****************************************************************************
 *
@@ -65,42 +65,70 @@ static void *create_shared_region(size_t size)
 *
 * DESCRIPTION
 *
-*   Forks processes given by input, prepares communication over shared memory
+*   Forks processes, sets up shared memory and synchronization objects.
+*   Server initializes shared control block and semaphores.
+*   Clients inherit mapping and register with the server to obtain rank.
 *
 ******************************************************************************/
 
 void com_initialize(int nr_proc, int *rank)
 {
     if (nr_proc <= 0 || !rank) {
-        fprintf(stderr, "Invalid arguments");
+        fprintf(stderr, "Invalid arguments\n");
         exit(1);
     }
 
-    void* region = create_shared_region(sizeof(int) + sizeof(sem_t));
-    shared_counter = (int*)region;
-    shared_sem = (sem_t*)((char*)region + sizeof(int));
+    /* Step 1: server creates shared control region */
+    ctl = create_shared_region(sizeof(Control));
+    memset(ctl, 0, sizeof(Control));
 
-    if (sem_init(shared_sem, 1, 1) == -1) {
-        perror("sem_init");
+    ctl->nr_proc = nr_proc;
+    ctl->next_rank = 1;      // next available rank for clients
+    ctl->live_count = 1;     // server counts as alive
+
+    if (sem_init(&ctl->reg_sem, 1, 1) == -1) {
+        perror("sem_init(reg_sem)");
         exit(1);
     }
-    *shared_counter = 0;
+    if (sem_init(&ctl->ready_sem, 1, 0) == -1) {
+        perror("sem_init(ready_sem)");
+        exit(1);
+    }
 
-    for (int i = 0 ; i < nr_proc; i++){
+    /* Server is rank 0 */
+    *rank = 0;
+    printf("Server initialized: rank=%d, pid=%d\n", *rank, getpid());
+    int i = 0;
+    /* Step 2: fork clients */
+    for (i = 1; i < nr_proc; i++) {
         pid_t pid = fork();
-        if (pid == -1){
+        if (pid == -1) {
             perror("fork");
             exit(1);
-        } else if (pid == 0){
-            sem_wait(shared_sem);
-            *shared_counter += 1;
-            *rank = *shared_counter;
-            sem_post(shared_sem);
+        } else if (pid == 0) {
+            /* --- Child (client) --- */
+            // inherit mapping (mmap shared)
+            sem_wait(&ctl->reg_sem);
+            int my_rank = ctl->next_rank++;
+            ctl->live_count++;
+            sem_post(&ctl->reg_sem);
+
+            *rank = my_rank;
             printf("Client started: rank=%d, pid=%d\n", *rank, getpid());
-            return;
+
+            // Signal server that registration finished
+            sem_post(&ctl->ready_sem);
+            return; // client leaves initialization
         }
     }
 
+    /* --- Parent (server) continues --- */
+    // Wait for all clients to finish registration
+    for (i = 1; i < nr_proc; i++) {
+        sem_wait(&ctl->ready_sem);
+    }
+
+    printf("All %d processes initialized.\n", nr_proc);
 }
 
 /*****************************************************************************
@@ -108,14 +136,6 @@ void com_initialize(int nr_proc, int *rank)
 * FUNCTION
 *
 *   com_finalize
-*
-* INPUT
-*
-* OUTPUT
-*
-* RETURNS
-*
-*   void
 *
 * DESCRIPTION
 *
@@ -133,20 +153,6 @@ void com_finalize()
 *
 *   com_recv
 *
-* INPUT
-*
-* OUTPUT
-*   void **message - pointer to the received message
-*   size_t *size - pointer to the size of the received message
-*
-* RETURNS
-*
-*   void
-*
-* DESCRIPTION
-*
-*   Receives a message
-*
 ******************************************************************************/
 
 void com_recv(void **message, size_t *size)
@@ -159,22 +165,6 @@ void com_recv(void **message, size_t *size)
 *
 *   com_send
 *
-* INPUT
-*
-*   int rank - rank of the recipient
-*   void *message - the message being sent
-*   size_t size - size of the message being sent
-*
-* OUTPUT
-*
-* RETURNS
-*
-*   void
-*
-* DESCRIPTION
-*
-*   Sends a message
-*
 ******************************************************************************/
 
 void com_send(int rank, void *message, size_t size)
@@ -186,20 +176,6 @@ void com_send(int rank, void *message, size_t size)
 * FUNCTION
 *
 *   com_mcast
-*
-* INPUT
-*
-* OUTPUT
-*   void *message - the message being sent
-*   size_t size - size of the message being sent
-*
-* RETURNS
-*
-*   void
-*
-* DESCRIPTION
-*
-*   Sends (multicasts) a message to all processes except to itself
 *
 ******************************************************************************/
 
