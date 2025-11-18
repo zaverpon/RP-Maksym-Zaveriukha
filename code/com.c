@@ -25,7 +25,7 @@ typedef struct {
 /*****************************************************************************
 * Local variables
 ******************************************************************************/
-
+extern int g_rank;
 static Control *ctl = NULL;    // shared control structure
 
 /* --------------------------------------------------------------------------
@@ -97,6 +97,7 @@ void com_initialize(int nr_proc, int *rank)
 
     /* Server is rank 0 */
     *rank = 0;
+    g_rank = 0;
     printf("Server initialized: rank=%d, pid=%d\n", *rank, getpid());
     int i = 0;
     /* Step 2: fork clients */
@@ -114,6 +115,7 @@ void com_initialize(int nr_proc, int *rank)
             sem_post(&ctl->reg_sem);
 
             *rank = my_rank;
+            g_rank = my_rank;
             printf("Client started: rank=%d, pid=%d\n", *rank, getpid());
 
             // Signal server that registration finished
@@ -145,6 +147,48 @@ void com_initialize(int nr_proc, int *rank)
 
 void com_finalize()
 {
+    if (ctl == NULL){
+        fprintf(stderr, "com_finalize called before com_initialize");
+        exit(1);
+    }
+    if (g_rank != 0){
+        sem_wait(&ctl->reg_sem);
+        ctl->live_count--;
+        int alive = ctl->live_count;
+        sem_post(&ctl->reg_sem);
+
+        printf("Client (rank %d, pid %d) finalized. Alive=%d\n",
+               g_rank, getpid(), alive);
+        return;
+    }
+
+    for (;;) {
+        sem_wait(&ctl->reg_sem);
+        int alive = ctl->live_count;
+        sem_post(&ctl->reg_sem);
+
+        if (alive == 1)
+            break;
+
+        usleep(1000); 
+    }
+
+    printf("All clients terminated. Cleaning up...\n");
+
+    if (sem_destroy(&ctl->reg_sem) == -1) {
+        perror("sem_destroy(reg_sem)");
+    }
+
+    if (sem_destroy(&ctl->ready_sem) == -1) {
+        perror("sem_destroy(ready_sem)");
+    }
+
+    if (munmap(ctl, sizeof(Control)) == -1) {
+        perror("munmap");
+    }
+
+    printf("Server finalized. Resources released.\n");
+
 }
 
 /*****************************************************************************
