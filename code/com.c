@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <stdio.h>
-#include <string.h>     // memset
+#include <string.h>     
 #include <semaphore.h>
 #include <unistd.h>
 
@@ -15,18 +15,18 @@
 ******************************************************************************/
 
 typedef struct {
-    int nr_proc;        // total number of processes (including server)
-    int next_rank;      // counter for assigning ranks
-    int live_count;     // number of active processes
-    sem_t reg_sem;      // protects registration (next_rank)
-    sem_t ready_sem;    // used to signal clients that rank is assigned
+    int nr_proc;        /* total number of processes (including server)*/
+    int next_rank;      /* counter for assigning ranks*/
+    int live_count;     /* number of active processes*/
+    sem_t reg_sem;      /* protects registration (next_rank)*/
+    sem_t ready_sem;    /* used to signal clients that rank is assigned*/
 } Control;
 
 /*****************************************************************************
 * Local variables
 ******************************************************************************/
 static int g_rank = -1;
-static Control *ctl = NULL;    // shared control structure
+static Control *ctl = NULL;    /* shared control structure*/
 
 /* --------------------------------------------------------------------------
    Support function for creating shared memory
@@ -83,8 +83,8 @@ void com_initialize(int nr_proc, int *rank)
     memset(ctl, 0, sizeof(Control));
 
     ctl->nr_proc = nr_proc;
-    ctl->next_rank = 1;      // next available rank for clients
-    ctl->live_count = 1;     // server counts as alive
+    ctl->next_rank = 1;      
+    ctl->live_count = 1;   
 
     if (sem_init(&ctl->reg_sem, 1, 1) == -1) {
         perror("sem_init(reg_sem)");
@@ -108,7 +108,7 @@ void com_initialize(int nr_proc, int *rank)
             exit(1);
         } else if (pid == 0) {
             /* --- Child (client) --- */
-            // inherit mapping (mmap shared)
+            
             sem_wait(&ctl->reg_sem);
             int my_rank = ctl->next_rank++;
             ctl->live_count++;
@@ -118,14 +118,13 @@ void com_initialize(int nr_proc, int *rank)
             g_rank = my_rank;
             printf("Client started: rank=%d, pid=%d\n", *rank, getpid());
 
-            // Signal server that registration finished
+           
             sem_post(&ctl->ready_sem);
-            return; // client leaves initialization
+            return; 
         }
     }
 
     /* --- Parent (server) continues --- */
-    // Wait for all clients to finish registration
     for (i = 1; i < nr_proc; i++) {
         sem_wait(&ctl->ready_sem);
     }
@@ -145,7 +144,7 @@ void com_initialize(int nr_proc, int *rank)
 *
 ******************************************************************************/
 
-void com_finalize()
+void com_finalize(void)
 {
     if (ctl == NULL){
         fprintf(stderr, "com_finalize called before com_initialize");

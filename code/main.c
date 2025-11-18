@@ -37,6 +37,14 @@ int main()
 
   com_initialize(nr_proc, &rank);
 
-  sleep(1);
+  if (rank == 0){
+    sleep(nr_proc);
+  } else {
+    sleep(rank);
+  }
+
+  printf("Process finishing: rank=%d, pid=%d\n", rank, getpid());
+
+  com_finalize();
   return 0; /* required */
 }
