@@ -22,11 +22,23 @@ typedef struct {
     sem_t ready_sem;    /* used to signal clients that rank is assigned*/
 } Control;
 
+typedef struct {
+    int full;
+    int src_rank;
+    int dest_rank;
+    size_t size;
+    void *shm_ptr;
+    sem_t sem;
+} MessageSlot;
+
+
 /*****************************************************************************
 * Local variables
 ******************************************************************************/
 static int g_rank = -1;
 static Control *ctl = NULL;    /* shared control structure*/
+static MessageSlot *server_slot = NULL;
+static MessageSlot *slots = NULL;
 
 /* --------------------------------------------------------------------------
    Support function for creating shared memory
@@ -124,6 +136,24 @@ void com_initialize(int nr_proc, int *rank)
         }
     }
 
+    /* allocate slot for server inbox */
+    server_slot = create_shared_region(sizeof(MessageSlot));
+    memset(server_slot, 0, sizeof(MessageSlot));
+    sem_init(&server_slot->sem, 1, 0);
+
+    /* allocate slot for server inbox */
+    slots = create_shared_region(sizeof(MessageSlot) * nr_proc);
+    for (int i = 0; i < nr_proc; i++){
+        slots[i].full = 0;
+        slots[i].size = 0;
+        slots[i].src_rank = -1;
+        slots[i].dest_rank = -1;
+        slots[i].shm_ptr = NULL;
+        sem_init(&slots[i].sem, 1, 0);
+    }
+
+
+
     /* --- Parent (server) continues --- */
     for (i = 1; i < nr_proc; i++) {
         sem_wait(&ctl->ready_sem);
@@ -200,6 +230,7 @@ void com_finalize(void)
 
 void com_recv(void **message, size_t *size)
 {
+
 }
 
 /*****************************************************************************
@@ -212,6 +243,39 @@ void com_recv(void **message, size_t *size)
 
 void com_send(int rank, void *message, size_t size)
 {
+    if (ctl == NULL) {
+        printf(stderr, "com_send: library not initialized \n");
+        exit(1);
+    }
+
+    if ( message == NULL || size == 0){
+        fprintf(stderr, "com_send: Invalid message\n");
+        exit(1);
+    }
+
+    if (rank < 0 || rank >= ctl->nr_proc){
+        fprintf(stderr, "com_send: Invalid rank of proccess\n");
+        exit(1);
+    }
+
+    MessageSlot *slot = server_slot;
+
+    /* Wait until slot is free */
+    while (__sync_lock_test_and_set(&slot->full, 1) == 1) {
+        usleep(1000);
+    }
+
+    /* Allocate shared memory for payload */
+    void *payload = create_shared_region(size);
+    memcpy(payload, message, size);
+
+    slot->size = size;
+    slot->src_rank = g_rank;
+    slot->dest_rank = rank;
+    slot->shm_ptr = payload;
+
+    /* Notify server there is a new message */
+    sem_post(&slot->sem);
 }
 
 /*****************************************************************************
