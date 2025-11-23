@@ -9,6 +9,7 @@
 #include <string.h>     
 #include <semaphore.h>
 #include <unistd.h>
+#include <pthread.h>
 
 /*****************************************************************************
 * Local typedefs
@@ -57,6 +58,7 @@ static void *create_shared_region(size_t size)
     return region;
 }
 
+void* server_thread(void* arg);
 /*****************************************************************************
 *
 * FUNCTION
@@ -141,7 +143,7 @@ void com_initialize(int nr_proc, int *rank)
     memset(server_slot, 0, sizeof(MessageSlot));
     sem_init(&server_slot->sem, 1, 0);
 
-    /* allocate slot for server inbox */
+    
     slots = create_shared_region(sizeof(MessageSlot) * nr_proc);
     for (int i = 0; i < nr_proc; i++){
         slots[i].full = 0;
@@ -152,14 +154,19 @@ void com_initialize(int nr_proc, int *rank)
         sem_init(&slots[i].sem, 1, 0);
     }
 
-
-
     /* --- Parent (server) continues --- */
     for (i = 1; i < nr_proc; i++) {
         sem_wait(&ctl->ready_sem);
     }
 
     printf("All %d processes initialized.\n", nr_proc);
+
+    /* START SERVER THREAD — only after clients are ready */
+    if (g_rank == 0) {
+        pthread_t tid;
+        pthread_create(&tid, NULL, server_thread, NULL);
+        pthread_detach(tid);
+    }
 }
 
 /*****************************************************************************
@@ -230,7 +237,31 @@ void com_finalize(void)
 
 void com_recv(void **message, size_t *size)
 {
+     if (ctl == NULL) {
+        fprintf(stderr, "com_recv: library not initialized\n");
+        exit(1);
+    }
 
+    MessageSlot *slot = &slots[g_rank];
+
+    sem_wait(&slot->sem);
+    *size = slot->size;
+
+    void *tmp = malloc(*size);
+    if (!tmp) {
+        perror("malloc");
+        exit(1);
+    }
+
+    memcpy(tmp, slot->shm_ptr, *size);
+    *message = tmp;
+
+    munmap(slot->shm_ptr, slot->size);
+    slot->shm_ptr = NULL;
+    slot->size = 0;
+    slot->src_rank = -1;
+    slot->dest_rank = -1;
+    slot->full = 0;
 }
 
 /*****************************************************************************
@@ -244,7 +275,7 @@ void com_recv(void **message, size_t *size)
 void com_send(int rank, void *message, size_t size)
 {
     if (ctl == NULL) {
-        printf(stderr, "com_send: library not initialized \n");
+        fprintf(stderr, "com_send: library not initialized \n");
         exit(1);
     }
 
@@ -288,4 +319,36 @@ void com_send(int rank, void *message, size_t size)
 
 void com_mcast(void *message, size_t size)
 {
+}
+
+
+void* server_thread(void* arg){
+    while (ctl->live_count > 1) {
+        sem_wait(&server_slot->sem);
+
+        int src = server_slot->src_rank;
+        int dest = server_slot->dest_rank;
+        size_t size = server_slot->size;
+        void* payload = server_slot->shm_ptr;
+
+        MessageSlot *client_slot = &slots[dest];
+
+        while (__sync_lock_test_and_set(&client_slot->full, 1) == 1) {
+            usleep(1000);
+        }
+
+        client_slot->src_rank = src;
+        client_slot->size = size;
+        client_slot->shm_ptr = payload;
+
+        sem_post(&client_slot->sem);
+        
+        /* clear server slot */
+        server_slot->full = 0;
+        server_slot->src_rank = -1;
+        server_slot->dest_rank = -1;
+        server_slot->size = 0;
+        server_slot->shm_ptr = NULL;
+    }
+    return NULL;
 }

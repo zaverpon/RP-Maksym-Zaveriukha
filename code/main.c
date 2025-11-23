@@ -3,7 +3,9 @@
 ****************************************************************************/
 #include "com.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 /****************************************************************************
 * Includes
 ****************************************************************************/
@@ -30,21 +32,31 @@
 
 int main()
 {
-  printf("Enter number of proccesses \n");
-  int rank = 0;
-  int nr_proc = 0;
-  scanf("%d" ,&nr_proc);
-
-  com_initialize(nr_proc, &rank);
-
+  int rank;
+  com_initialize(2, &rank);
+  
   if (rank == 0){
-    sleep(nr_proc);
-  } else {
-    sleep(rank);
+    printf("Server: waiting for clients to finish...\n");
+    com_finalize();
+    printf("Server: done.\n");
   }
 
-  printf("Process finishing: rank=%d, pid=%d\n", rank, getpid());
+  if (rank == 1){
+    const char* msg = "Hello from client 1!\n";
+    com_send(2, (void*)msg, strlen(msg)+1);
+    printf("Client 1: message sent. \n");
+  }
 
+  if (rank == 2){
+    void* buff;
+    size_t size;
+
+    com_recv(&buff, &size);
+    printf("Client 2: recieved message: '%s' \n", (char*)buff);
+    free(buff);
+  }
+
+  usleep(100000);
   com_finalize();
-  return 0; /* required */
+  return 0; 
 }
