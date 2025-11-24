@@ -1,8 +1,6 @@
 /****************************************************************************
-*                com.c — fixed shared-memory communication
+*                com.c —  shared-memory communication
 *****************************************************************************/
-
-#define _XOPEN_SOURCE 700
 
 #include "com.h"
 #include <stdlib.h>
@@ -15,34 +13,17 @@
 #include <time.h>
 
 /*****************************************************************************
-* Constants
-******************************************************************************/
-
-#define COM_MAX_MSG_SIZE 4096
-
-/*****************************************************************************
 * Shared structures
 ******************************************************************************/
 
 typedef struct {
-    int nr_proc;
-    int next_rank;
-    int live_count;
-
-    volatile int all_ready;
-
-    sem_t reg_sem;
-    sem_t ready_sem;
+    int nr_proc;       // total number of processes
+    int next_rank;     // rank counter for forked clients
+    int live_count;    // number of alive processes
+    int ready_flag; // sync flag after fork
+    sem_t reg_sem;     // protects next_rank and live_count
+    sem_t ready_sem;   // used for initial barrier during startup
 } Control;
-
-typedef struct {
-    int full;
-    int src_rank;
-    int dest_rank;
-    size_t size;
-    char data[COM_MAX_MSG_SIZE];
-    sem_t sem;
-} MessageSlot;
 
 /*****************************************************************************
 * Globals
@@ -50,8 +31,6 @@ typedef struct {
 
 static int g_rank = -1;
 static Control *ctl = NULL;
-static MessageSlot *server_slot = NULL;
-static MessageSlot *slots = NULL;
 
 /*****************************************************************************
 * Shared memory allocator
@@ -70,8 +49,6 @@ static void *create_shared_region(size_t size)
     return region;
 }
 
-void* server_thread(void* arg);
-
 /*****************************************************************************
 * com_initialize
 ******************************************************************************/
@@ -83,42 +60,33 @@ void com_initialize(int nr_proc, int *rank)
         exit(1);
     }
 
-    /* Control block */
+    /* Allocate and initialize control block in shared memory */
     ctl = create_shared_region(sizeof(Control));
     memset(ctl, 0, sizeof(Control));
 
     ctl->nr_proc = nr_proc;
-    ctl->next_rank = 1;
-    ctl->live_count = 1;
-    ctl->all_ready = 0;
+    ctl->next_rank = 1; /* first client will get rank 1 */  
+    ctl->live_count = 1;    /* server itself */
+    ctl->ready_flag = 0;
 
-    sem_init(&ctl->reg_sem,   1, 1);
-    sem_init(&ctl->ready_sem, 1, 0);
-
-    /* Server slot */
-    server_slot = create_shared_region(sizeof(MessageSlot));
-    memset(server_slot, 0, sizeof(MessageSlot));
-    sem_init(&server_slot->sem, 1, 0);
-
-    /* Per-client slots */
-    slots = create_shared_region(sizeof(MessageSlot) * nr_proc);
-    int i = 0;
-    for (i = 0; i < nr_proc; i++) {
-        memset(&slots[i], 0, sizeof(MessageSlot));
-        sem_init(&slots[i].sem, 1, 0);
+    /* Initialize semaphores */
+    if (sem_init(&ctl->reg_sem, 1, 1) != 0) {
+        perror("sem_init reg_sem");
+        exit(1);
     }
-
-    /* Server */
+    if (sem_init(&ctl->ready_sem, 1, 0) != 0) {
+        perror("sem_init ready_sem");
+        exit(1);
+    }
+   
+    /* This process is the server (rank 0) before fork */
     g_rank = 0;
     *rank = 0;
-    printf("Server initialized: rank=0, pid=%d\n", getpid());
+    printf("Server initialized: rank=0, pid=%d\n", (int)getpid());
 
-    /* Start router thread BEFORE fork() */
-    pthread_t tid;
-    pthread_create(&tid, NULL, server_thread, NULL);
-    pthread_detach(tid);
 
     /* Fork clients */
+    int i;
     for (i = 1; i < nr_proc; i++) {
         pid_t pid = fork();
 
@@ -131,29 +99,30 @@ void com_initialize(int nr_proc, int *rank)
             sem_wait(&ctl->reg_sem);
             int r = ctl->next_rank++;
             ctl->live_count++;
-            sem_post(&ctl->reg_sem);
-
             g_rank = r;
             *rank = r;
+            sem_post(&ctl->reg_sem);
 
             printf("Client started: rank=%d, pid=%d\n", r, getpid());
 
+            /* Notify server that this client is ready */
             sem_post(&ctl->ready_sem);
 
-            while (!ctl->all_ready)
-                sleep_ms(1);
+            /* Wait until server releases all clients */
+            while (!ctl->ready_flag)
+                sleep(1);
 
             return;
         }
+        /* Parent continues loop to fork more clients */
     }
 
-    /* Server waits for all clients */
+    /* Server waits until all clients report ready */
     for (i = 1; i < nr_proc; i++)
         sem_wait(&ctl->ready_sem);
 
-    printf("All %d processes registered.\n", nr_proc);
-
-    ctl->all_ready = 1;
+    /* Release clients */
+    ctl->ready_flag = 1;
 
     printf("All %d processes initialized.\n", nr_proc);
 }
@@ -197,7 +166,6 @@ void com_finalize(void)
 
     sem_destroy(&ctl->reg_sem);
     sem_destroy(&ctl->ready_sem);
-
     munmap(ctl, sizeof(Control));
 
     printf("Server finalized.\n");
@@ -209,19 +177,7 @@ void com_finalize(void)
 
 void com_recv(void **message, size_t *size)
 {
-    MessageSlot *slot = &slots[g_rank];
 
-    sem_wait(&slot->sem);
-
-    *size = slot->size;
-    void *tmp = malloc(*size);
-    memcpy(tmp, slot->data, *size);
-    *message = tmp;
-
-    slot->full = 0;
-    slot->size = 0;
-    slot->src_rank = -1;
-    slot->dest_rank = -1;
 }
 
 /*****************************************************************************
@@ -230,57 +186,15 @@ void com_recv(void **message, size_t *size)
 
 void com_send(int rank, void *message, size_t size)
 {
-    if (size > COM_MAX_MSG_SIZE) {
-        fprintf(stderr, "Message too large (%zu > %d)\n",
-                size, COM_MAX_MSG_SIZE);
-        exit(1);
-    }
 
-    MessageSlot *slot = server_slot;
-
-    while (__sync_lock_test_and_set(&slot->full, 1) == 1)
-        sleep(1);
-
-    slot->src_rank  = g_rank;
-    slot->dest_rank = rank;
-    slot->size      = size;
-    memcpy(slot->data, message, size);
-
-    sem_post(&slot->sem);
 }
 
 /*****************************************************************************
-* SERVER THREAD — router
+* com_mcast
 ******************************************************************************/
-
-void* server_thread(void* arg)
+void com_mcast(void *msg, size_t size)
 {
-    while (1) {
-        sem_wait(&server_slot->sem);
 
-        sem_wait(&ctl->reg_sem);
-        int alive = ctl->live_count;
-        sem_post(&ctl->reg_sem);
-
-        if (alive <= 1)
-            break;
-
-        int dest = server_slot->dest_rank;
-        MessageSlot *client_slot = &slots[dest];
-
-        while (__sync_lock_test_and_set(&client_slot->full, 1) == 1)
-            sleep(1);
-
-        client_slot->src_rank  = server_slot->src_rank;
-        client_slot->dest_rank = dest;
-        client_slot->size      = server_slot->size;
-        memcpy(client_slot->data, server_slot->data, server_slot->size);
-
-        sem_post(&client_slot->sem);
-
-        server_slot->full = 0;
-        server_slot->size = 0;
-    }
-
-    return NULL;
 }
+
+

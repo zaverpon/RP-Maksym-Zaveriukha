@@ -7,7 +7,7 @@
 int main()
 {
     int rank;
-    com_initialize(3, &rank);
+    com_initialize(5, &rank);
 
     if (rank == 0) {
         printf("Server: waiting for clients to finish...\n");
@@ -22,6 +22,12 @@ int main()
         printf("Client 1: message sent.\n");
         sleep(1);
     }
+    if (rank == 3){
+        const char* msg = "Hello from client 3!\n";
+        com_send(4, (void*)msg, strlen(msg) + 1);
+        printf("Client 1: message sent.\n");
+        sleep(1);
+    }
 
     if (rank == 2) {
         void* buff;
@@ -29,6 +35,15 @@ int main()
 
         com_recv(&buff, &size);
         printf("Client 2: received message:'%s'\n", (char*)buff);
+        free(buff);
+        sleep(1);
+    }
+    if (rank == 4) {
+        void* buff;
+        size_t size;
+
+        com_recv(&buff, &size);
+        printf("Client 4: received message:'%s'\n", (char*)buff);
         free(buff);
         sleep(1);
     }
