@@ -9,7 +9,6 @@
 #include <string.h>
 #include <semaphore.h>
 #include <unistd.h>
-#include <pthread.h>
 #include <time.h>
 
 /*****************************************************************************
@@ -17,20 +16,20 @@
 ******************************************************************************/
 
 typedef struct {
-    int nr_proc;       // total number of processes
-    int next_rank;     // rank counter for forked clients
-    int live_count;    // number of alive processes
-    int ready_flag; // sync flag after fork
-    sem_t reg_sem;     // protects next_rank and live_count
-    sem_t ready_sem;   // used for initial barrier during startup
+    int nr_proc;       /* total number of processes */
+    int next_rank;     /* rank counter for forked clients */
+    int live_count;    /* number of alive processes */
+    int ready_flag;    /* sync flag after fork */ 
+    sem_t reg_sem;     /* protects next_rank and live_count */
+    sem_t ready_sem;   /* used for initial barrier during startup */
 } Control;
 
 /*****************************************************************************
 * Globals
 ******************************************************************************/
 
-static int g_rank = -1;
-static Control *ctl = NULL;
+static int g_rank = -1;     /*rank of current proccess*/
+static Control *ctl = NULL; /*pointer to shared memory*/
 
 /*****************************************************************************
 * Shared memory allocator
@@ -65,7 +64,7 @@ void com_initialize(int nr_proc, int *rank)
     memset(ctl, 0, sizeof(Control));
 
     ctl->nr_proc = nr_proc;
-    ctl->next_rank = 1; /* first client will get rank 1 */  
+    ctl->next_rank = 1;     /* first client will get rank 1 */  
     ctl->live_count = 1;    /* server itself */
     ctl->ready_flag = 0;
 
@@ -80,7 +79,6 @@ void com_initialize(int nr_proc, int *rank)
     }
    
     /* This process is the server (rank 0) before fork */
-    g_rank = 0;
     *rank = 0;
     printf("Server initialized: rank=0, pid=%d\n", (int)getpid());
 
