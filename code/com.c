@@ -80,6 +80,7 @@ void com_initialize(int nr_proc, int *rank)
    
     /* This process is the server (rank 0) before fork */
     *rank = 0;
+    g_rank = 0;
     printf("Server initialized: rank=0, pid=%d\n", (int)getpid());
 
 

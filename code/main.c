@@ -6,18 +6,15 @@ int main(void)
 {
     int rank;
 
-    com_initialize(5, &rank);
+    com_initialize(4, &rank);
 
-    if (rank == 0) {
-        printf("Server: waiting for clients to finish...\n");
-        sleep(2); /* simulate some work */
-        com_finalize();
-        printf("Server: done.\n");
-    } else {
-        printf("Client %d: doing some work...\n", rank);
-        sleep(1 + rank); /* simulate different work times */
-        com_finalize();
-    }
+    printf("Proccess running: rank: %d , pid: %d\n", rank, getpid());
+
+    sleep(rank + 1);
+
+    printf("Proccess finishing: rank: %d, pid: %d\n", rank, getpid());
+
+    com_finalize();
 
     return 0;
 }
