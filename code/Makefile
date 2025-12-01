@@ -18,7 +18,7 @@ com.o: com.c com.h
 
 main: main.o libcom.a
 	$(CC) main.o -L. -lcom -pthread -o main
-	@echo "Run with ./main"
+	
 
 main.o: main.c com.h
 	$(CC) $(CFLAGS) main.c
