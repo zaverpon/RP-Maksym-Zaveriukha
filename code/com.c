@@ -16,8 +16,8 @@
 ******************************************************************************/
 
 typedef struct {
-    int nr_proc;       /* total number of processes */
-    int next_rank;     /* rank counter for forked clients */
+    int nr_proc;       /* number of clients of processes */
+    int next_rank;     /* next client rank to assign */
     int live_count;    /* number of alive processes */
     int ready_flag;    /* sync flag after fork */ 
     sem_t reg_sem;     /* protects next_rank and live_count */
@@ -28,8 +28,9 @@ typedef struct {
 * Globals
 ******************************************************************************/
 
-static int g_rank = -1;     /*rank of current proccess*/
 static Control *ctl = NULL; /*pointer to shared memory*/
+static int server_rank = -1;
+static int g_rank = -1;     /*rank of current proccess*/
 
 /*****************************************************************************
 * Shared memory allocator
@@ -64,7 +65,7 @@ void com_initialize(int nr_proc, int *rank)
     memset(ctl, 0, sizeof(Control));
 
     ctl->nr_proc = nr_proc;
-    ctl->next_rank = 1;     /* first client will get rank 1 */  
+    ctl->next_rank = 0;     /* first client will get rank 0 */  
     ctl->live_count = 1;    /* server itself */
     ctl->ready_flag = 0;
 
@@ -78,15 +79,15 @@ void com_initialize(int nr_proc, int *rank)
         exit(1);
     }
    
-    /* This process is the server (rank 0) before fork */
-    *rank = 0;
-    g_rank = 0;
-    printf("Server initialized: rank=0, pid=%d\n", (int)getpid());
+    /* This process is the server (rank -1) before fork */
+    *rank = server_rank;
+    g_rank = server_rank;
+    printf("Server initialized: rank=%d, pid=%d\n", g_rank, (int)getpid());
 
 
     /* Fork clients */
     int i;
-    for (i = 1; i < nr_proc; i++) {
+    for (i = 0; i < nr_proc; i++) {
         pid_t pid = fork();
 
         if (pid < 0) {
@@ -117,13 +118,13 @@ void com_initialize(int nr_proc, int *rank)
     }
 
     /* Server waits until all clients report ready */
-    for (i = 1; i < nr_proc; i++)
+    for (i = 0; i < nr_proc; i++)
         sem_wait(&ctl->ready_sem);
 
     /* Release clients */
     ctl->ready_flag = 1;
 
-    printf("All %d processes initialized.\n", nr_proc);
+    printf("All %d client processes initialized. Total processes=%d\n", nr_proc, nr_proc + 1);
 }
 
 /*****************************************************************************
@@ -137,7 +138,7 @@ void com_finalize(void)
         exit(1);
     }
 
-    if (g_rank != 0) {
+    if (g_rank != -1) {
         /* client */
         sem_wait(&ctl->reg_sem);
         ctl->live_count--;
