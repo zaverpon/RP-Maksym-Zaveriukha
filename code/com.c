@@ -1,5 +1,5 @@
 /****************************************************************************
-* com.c — shared-memory communication (one slot per client, C90 style)
+* com.c — shared-memory communication 
 *****************************************************************************/
 
 #include "com.h"
@@ -9,19 +9,18 @@
 #include <string.h>
 #include <semaphore.h>
 #include <unistd.h>
-#include <errno.h>
 
-#define COM_MAX_MSG 1024 
+#define COM_MAX_MSG 1024
 
 typedef struct {
     int nr_proc;
+    int total;       /* nr_proc + 1 (including server) */
     int next_rank;
     int live_count;
+
     sem_t reg_sem;
     sem_t ready_sem;   /* clients -> server */
     sem_t start_sem;   /* server -> clients */
-    /* signals that at least one client slot is full */
-    sem_t any_full;
 } Control;
 
 typedef struct {
@@ -31,10 +30,10 @@ typedef struct {
     int sender_rank;
     size_t size;
     unsigned char data[COM_MAX_MSG];
-} ClientSlot;
+} InboxSlot;
 
 static Control *ctl = NULL;
-static ClientSlot *slots = NULL;
+static InboxSlot *slots = NULL;
 static int g_rank = -1;
 
 static void *create_shared_region(size_t size)
@@ -52,6 +51,7 @@ static void *create_shared_region(size_t size)
     return region;
 }
 
+
 void com_initialize(int nr_proc, int *rank)
 {
     int i;
@@ -66,21 +66,22 @@ void com_initialize(int nr_proc, int *rank)
     ctl = (Control *)create_shared_region(sizeof(Control));
     memset(ctl, 0, sizeof(Control));
 
-    slots = (ClientSlot *)create_shared_region(sizeof(ClientSlot) * (size_t)nr_proc);
-    memset(slots, 0, sizeof(ClientSlot) * (size_t)nr_proc);
-
     ctl->nr_proc = nr_proc;
+    ctl->total = nr_proc + 1;
     ctl->next_rank = 0;
     ctl->live_count = 1; /* server */
+
+    /* allocate inbox slots for ALL processes: clients + server */
+    slots = (InboxSlot *)create_shared_region(sizeof(InboxSlot) * (size_t)ctl->total);
+    memset(slots, 0, sizeof(InboxSlot) * (size_t)ctl->total);
 
     if (sem_init(&ctl->reg_sem, 1, 1) != 0) { perror("sem_init reg_sem"); exit(1); }
     if (sem_init(&ctl->ready_sem, 1, 0) != 0) { perror("sem_init ready_sem"); exit(1); }
     if (sem_init(&ctl->start_sem, 1, 0) != 0) { perror("sem_init start_sem"); exit(1); }
-    if (sem_init(&ctl->any_full, 1, 0) != 0) { perror("sem_init any_full"); exit(1); }
 
-    for (i = 0; i < nr_proc; i++) {
-        if (sem_init(&slots[i].empty, 1, 1) != 0) { perror("sem_init slot empty"); exit(1); }
-        if (sem_init(&slots[i].full,  1, 0) != 0) { perror("sem_init slot full"); exit(1); }
+    for (i = 0; i < ctl->total; i++) {
+        if (sem_init(&slots[i].empty, 1, 1) != 0) { perror("sem_init inbox empty"); exit(1); }
+        if (sem_init(&slots[i].full,  1, 0) != 0) { perror("sem_init inbox full"); exit(1); }
         slots[i].sender_rank = -2;
         slots[i].size = 0;
     }
@@ -118,14 +119,10 @@ void com_initialize(int nr_proc, int *rank)
     }
 
     /* server waits until all clients ready */
-    for (i = 0; i < nr_proc; i++) {
-        sem_wait(&ctl->ready_sem);
-    }
+    for (i = 0; i < nr_proc; i++) sem_wait(&ctl->ready_sem);
 
     /* release clients */
-    for (i = 0; i < nr_proc; i++) {
-        sem_post(&ctl->start_sem);
-    }
+    for (i = 0; i < nr_proc; i++) sem_post(&ctl->start_sem);
 
     printf("All %d client processes initialized. Total processes=%d\n",
            nr_proc, nr_proc + 1);
@@ -160,7 +157,7 @@ void com_finalize(void)
 
     printf("All clients terminated. Cleaning up...\n");
 
-    for (i = 0; i < ctl->nr_proc; i++) {
+    for (i = 0; i < ctl->total; i++) {
         sem_destroy(&slots[i].empty);
         sem_destroy(&slots[i].full);
     }
@@ -168,9 +165,8 @@ void com_finalize(void)
     sem_destroy(&ctl->reg_sem);
     sem_destroy(&ctl->ready_sem);
     sem_destroy(&ctl->start_sem);
-    sem_destroy(&ctl->any_full);
 
-    munmap(slots, sizeof(ClientSlot) * (size_t)ctl->nr_proc);
+    munmap(slots, sizeof(InboxSlot) * (size_t)ctl->total);
     munmap(ctl, sizeof(Control));
 
     slots = NULL;
@@ -179,17 +175,11 @@ void com_finalize(void)
     printf("Server finalized.\n");
 }
 
-/* client -> server */
 void com_send(int rank, void *message, size_t size)
 {
-    ClientSlot *s;
+    int dest_idx;
+    InboxSlot *s;
 
-    (void)rank;
-
-    if (g_rank < 0) {
-        fprintf(stderr, "com_send: called from server\n");
-        exit(1);
-    }
     if (!message || size == 0) {
         fprintf(stderr, "com_send: invalid message\n");
         exit(1);
@@ -199,90 +189,33 @@ void com_send(int rank, void *message, size_t size)
         exit(1);
     }
 
-    s = &slots[g_rank];
+    if (rank == -1) dest_idx = ctl->nr_proc;
+    else dest_idx = rank;   
+    
+    if (dest_idx < 0) {
+        fprintf(stderr, "com_send: invalid destination rank\n");
+        exit(1);
+    }
 
-    /* wait until my slot is empty */
+    s = &slots[dest_idx];
+
+    /* wait until receiver's inbox is empty */
     sem_wait(&s->empty);
 
     memcpy(s->data, message, size);
     s->size = size;
     s->sender_rank = g_rank;
 
+    /* mark inbox as full (receiver can read) */
     sem_post(&s->full);
-    sem_post(&ctl->any_full);
 }
 
 void com_recv(void **message, size_t *size)
 {
-    int found;
-    int i;
-    ClientSlot *s;
-    size_t n;
-    void *dst;
-
-    if (!message || !size) {
-        fprintf(stderr, "com_recv: invalid arguments\n");
-        exit(1);
-    }
-    if (g_rank != -1) {
-        fprintf(stderr, "com_recv: called from client\n");
-        exit(1);
-    }
-
-    /* wait until at least one slot is full */
-    sem_wait(&ctl->any_full);
-
-    found = -1;
-
-    /* find which slot is full */
-    for (i = 0; i < ctl->nr_proc; i++) {
-        if (sem_trywait(&slots[i].full) == 0) {
-            found = i;
-            break;
-        }
-        if (errno != EAGAIN) {
-            perror("sem_trywait");
-            exit(1);
-        }
-    }
-
-    /* safety fallback */
-    while (found == -1) {
-        for (i = 0; i < ctl->nr_proc; i++) {
-            if (sem_trywait(&slots[i].full) == 0) {
-                found = i;
-                break;
-            }
-            if (errno != EAGAIN) {
-                perror("sem_trywait");
-                exit(1);
-            }
-        }
-        if (found == -1) {
-            usleep(1000); 
-        }
-    }
-
-    s = &slots[found];
-    n = s->size;
-
-    dst = malloc(n);
-    if (!dst) {
-        perror("malloc");
-        exit(1);
-    }
-
-    memcpy(dst, s->data, n);
-
-    s->size = 0;
-    s->sender_rank = -2;
-
-    sem_post(&s->empty);
-
-    *message = dst;
-    *size = n;
+  
 }
 
 void com_mcast(void *msg_buf, size_t size)
 {
+
 }
