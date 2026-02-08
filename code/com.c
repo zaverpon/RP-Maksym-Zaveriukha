@@ -1,5 +1,5 @@
 /****************************************************************************
-*                com.c — fixed shared-memory communication
+*                com.c 
 *****************************************************************************/
 
 #define _XOPEN_SOURCE 700
@@ -59,15 +59,16 @@ static MessageSlot *slots = NULL;
 
 static void *create_shared_region(size_t size)
 {
-    void *region = mmap(NULL, size,
-                        PROT_READ | PROT_WRITE,
-                        MAP_SHARED | MAP_ANONYMOUS,
-                        -1, 0);
-    if (region == MAP_FAILED) {
-        perror("mmap");
-        exit(1);
-    }
-    return region;
+    //fix this !!
+    // void *region = mmap(NULL, size,
+    //                     PROT_READ | PROT_WRITE,
+    //                     MAP_SHARED | MAP_ANONYMOUS,
+    //                     -1, 0);
+    // if (region == MAP_FAILED) {
+    //     perror("mmap");
+    //     exit(1);
+    // }
+    // return region;
 }
 
 void* server_thread(void* arg);
