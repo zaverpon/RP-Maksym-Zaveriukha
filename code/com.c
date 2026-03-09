@@ -10,8 +10,9 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <time.h>
+#include <sys/time.h>
 #include <unistd.h>
+#include <bits/time.h>
 
 #define USER_COUNT 2
 #define COM_SHM_NAME_LEN 128
@@ -116,23 +117,19 @@ static void create_message_shm(const void *message, size_t size, char name_out[C
 {
     int fd;
     void *mapping;
-    struct timespec ts;
     int written;
+   struct timeval tv;
 
-    if (clock_gettime(CLOCK_REALTIME, &ts) == -1) {
-        perror("clock_gettime");
-        exit(1);
-    }
+if (gettimeofday(&tv, NULL) == -1) {
+    perror("gettimeofday");
+    exit(1);
+}
 
-    written = snprintf(name_out, COM_SHM_NAME_LEN,
-                       "/com_msg_%ld_%lu_%ld",
-                       (long)getpid(),
-                       g_msg_counter++,
-                       (long)ts.tv_nsec);
-    if (written < 0 || written >= COM_SHM_NAME_LEN) {
-        fprintf(stderr, "create_message_shm: name too long\n");
-        exit(1);
-    }
+written = snprintf(name_out, COM_SHM_NAME_LEN,
+                   "/com_msg_%ld_%lu_%ld",
+                   (long)getpid(),
+                   g_msg_counter++,
+                   (long)tv.tv_usec);
 
     fd = shm_open(name_out, O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd == -1) {
@@ -415,12 +412,6 @@ void com_recv(void **msg, size_t *size)
 
 void com_mcast(void *msg, size_t size)
 {
-    if (g_rank < 0) {
-        fprintf(stderr, "com_mcast: server cannot use user API\n");
-        exit(1);
-    }
-
-    com_send(1 - g_rank, msg, size);
 }
 
 void com_finalize(void)
