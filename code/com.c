@@ -11,31 +11,36 @@
 
 #define COM_SHM_NAME_LEN 128
 
+/* Per-process mailbox stored in shared anonymous memory. */
 typedef struct {
-    pid_t pid;
-    sem_t empty;
-    sem_t full;
-    sem_t consumed;
-    int src_rank;
-    size_t size;
-    char shm_name[COM_SHM_NAME_LEN];
+    pid_t pid;                  /* OS process id, also used for shm name. */
+    sem_t empty;                /* Slot is free and can accept a new message. */
+    sem_t full;                 /* Slot contains a message ready to read. */
+    sem_t consumed;             /* Receiver finished reading the message. */
+    size_t size;                /* Current message size in bytes. */
+    char shm_name[COM_SHM_NAME_LEN]; /* Name of this process's persistent shm segment. */
 } ProcessSlot;
 
+/* Global shared state inherited by all children after fork(). */
 typedef struct {
-    int nr_proc;
-    sem_t ready_sem;
-    sem_t start_sem;
-    ProcessSlot slots[];
+    int nr_proc;                /* Number of user processes. */
+    sem_t ready_sem;            /* Child reports that its shm segment is ready. */
+    sem_t start_sem;            /* Server releases all children after setup. */
+    ProcessSlot slots[];        /* One mailbox slot per user process. */
 } SharedState;
 
+/* Rank of the current user process. */
 static int g_rank = -1;
+/* Pointer to the shared anonymous region. */
 static SharedState *g_shared = NULL;
+
 
 static size_t shared_region_size(int nr_proc)
 {
     return sizeof(SharedState) + (size_t)nr_proc * sizeof(ProcessSlot);
 }
 
+/* Wrapper for sem_wait */
 static void sem_wait_checked(sem_t *sem)
 {
     if (sem_wait(sem) == -1) {
@@ -44,6 +49,7 @@ static void sem_wait_checked(sem_t *sem)
     }
 }
 
+/* Wrapper for sem_post */
 static void sem_post_checked(sem_t *sem)
 {
     if (sem_post(sem) == -1) {
@@ -52,6 +58,7 @@ static void sem_post_checked(sem_t *sem)
     }
 }
 
+/* Create and initialize the shared anonymous region used by all processes. */
 static SharedState *create_shared_region(int nr_proc)
 {
     int i;
@@ -79,7 +86,6 @@ static SharedState *create_shared_region(int nr_proc)
 
     for (i = 0; i < nr_proc; i++) {
         shared->slots[i].pid = -1;
-        shared->slots[i].src_rank = -1;
         shared->slots[i].size = 0;
         shared->slots[i].shm_name[0] = '\0';
 
@@ -100,6 +106,7 @@ static SharedState *create_shared_region(int nr_proc)
     return shared;
 }
 
+/* Destroy all shared synchronization objects and remove all shm segments. */
 static void destroy_shared_region(void)
 {
     int i;
@@ -148,6 +155,7 @@ static void destroy_shared_region(void)
     g_shared = NULL;
 }
 
+/* Create the persistent shm segment owned by one user process. */
 static void create_process_segment(int rank)
 {
     int fd;
@@ -174,6 +182,7 @@ static void create_process_segment(int rank)
     }
 }
 
+/* Open receiver's shm segment, resize it, and copy the payload into it. */
 static void write_message_to_segment(const char *name, const void *message, size_t size)
 {
     int fd;
@@ -211,6 +220,7 @@ static void write_message_to_segment(const char *name, const void *message, size
     }
 }
 
+/* Read payload from the current process's shm segment into local heap memory. */
 static void read_message_from_segment(const char *name, size_t size, void **message_out)
 {
     int fd;
@@ -266,6 +276,7 @@ static void read_message_from_segment(const char *name, size_t size, void **mess
     *message_out = copy;
 }
 
+/* Server process creates all children and waits until all are ready to run. */
 void com_initialize(int nr_proc, int *rank)
 {
     int i;
@@ -311,6 +322,7 @@ void com_initialize(int nr_proc, int *rank)
     _exit(0);
 }
 
+/* Send one message to the target process using its dedicated shm segment. */
 void com_send(int rank, void *msg, size_t size)
 {
     ProcessSlot *slot = &g_shared->slots[rank];
@@ -319,7 +331,6 @@ void com_send(int rank, void *msg, size_t size)
 
     write_message_to_segment(slot->shm_name, msg, size);
 
-    slot->src_rank = g_rank;
     slot->size = size;
 
     sem_post_checked(&slot->full);
@@ -327,6 +338,7 @@ void com_send(int rank, void *msg, size_t size)
     sem_post_checked(&slot->empty);
 }
 
+/* Receive one message from the current process's dedicated slot. */
 void com_recv(void **msg, size_t *size)
 {
     ProcessSlot *slot = &g_shared->slots[g_rank];
@@ -336,12 +348,12 @@ void com_recv(void **msg, size_t *size)
     *size = slot->size;
     read_message_from_segment(slot->shm_name, slot->size, msg);
 
-    slot->src_rank = -1;
     slot->size = 0;
 
     sem_post_checked(&slot->consumed);
 }
 
+/* Multicast is implemented as repeated point-to-point sends. */
 void com_mcast(void *msg, size_t size)
 {
     int i;
@@ -353,6 +365,7 @@ void com_mcast(void *msg, size_t size)
     }
 }
 
+/* Detach the current process from the shared anonymous region. */
 void com_finalize(void)
 {
     size_t size = shared_region_size(g_shared->nr_proc);
