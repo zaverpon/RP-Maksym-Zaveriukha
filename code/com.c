@@ -1,63 +1,47 @@
-
 #include "com.h"
 
-#include <errno.h>
 #include <fcntl.h>
 #include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/time.h>
 #include <unistd.h>
-#include <bits/time.h>
 
-#define USER_COUNT 2
 #define COM_SHM_NAME_LEN 128
 
 typedef struct {
-    sem_t finalized_user;
-} Control;
-
-typedef struct {
-    sem_t empty;
-    sem_t full;
-    sem_t delivered;
-    int src_rank;
-    int dest_rank;
-    size_t size;
-    char shm_name[COM_SHM_NAME_LEN];
-} ServerMailbox;
-
-typedef struct {
+    pid_t pid;
     sem_t empty;
     sem_t full;
     sem_t consumed;
     int src_rank;
     size_t size;
     char shm_name[COM_SHM_NAME_LEN];
-} ClientMailbox;
+} ProcessSlot;
 
 typedef struct {
-    Control ctl;
-    ServerMailbox server_box;
-    ClientMailbox inbox[USER_COUNT];
+    int nr_proc;
+    sem_t ready_sem;
+    sem_t start_sem;
+    ProcessSlot slots[];
 } SharedState;
 
-static int g_rank = -2;
-static pid_t g_server_pid = -1;
-static pid_t g_user1_pid = -1;
-static unsigned long g_msg_counter = 0;
+static int g_rank = -1;
 static SharedState *g_shared = NULL;
+
+static size_t shared_region_size(int nr_proc)
+{
+    return sizeof(SharedState) + (size_t)nr_proc * sizeof(ProcessSlot);
+}
 
 static void sem_wait_checked(sem_t *sem)
 {
-   if (sem_wait(sem) == -1) {
+    if (sem_wait(sem) == -1) {
         perror("sem_wait");
         exit(1);
-   }
+    }
 }
 
 static void sem_post_checked(sem_t *sem)
@@ -68,117 +52,166 @@ static void sem_post_checked(sem_t *sem)
     }
 }
 
-static void *create_shared_region(size_t size)
+static SharedState *create_shared_region(int nr_proc)
 {
-    void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
-                     MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (ptr == MAP_FAILED) {
+    int i;
+    size_t size = shared_region_size(nr_proc);
+    SharedState *shared = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                               MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+
+    if (shared == MAP_FAILED) {
         perror("mmap");
         exit(1);
     }
 
-    memset(ptr, 0, size);
-    return ptr;
+    memset(shared, 0, size);
+    shared->nr_proc = nr_proc;
+
+    if (sem_init(&shared->ready_sem, 1, 0) == -1) {
+        perror("sem_init(ready_sem)");
+        exit(1);
+    }
+
+    if (sem_init(&shared->start_sem, 1, 0) == -1) {
+        perror("sem_init(start_sem)");
+        exit(1);
+    }
+
+    for (i = 0; i < nr_proc; i++) {
+        shared->slots[i].pid = -1;
+        shared->slots[i].src_rank = -1;
+        shared->slots[i].size = 0;
+        shared->slots[i].shm_name[0] = '\0';
+
+        if (sem_init(&shared->slots[i].empty, 1, 1) == -1) {
+            perror("sem_init(empty)");
+            exit(1);
+        }
+        if (sem_init(&shared->slots[i].full, 1, 0) == -1) {
+            perror("sem_init(full)");
+            exit(1);
+        }
+        if (sem_init(&shared->slots[i].consumed, 1, 0) == -1) {
+            perror("sem_init(consumed)");
+            exit(1);
+        }
+    }
+
+    return shared;
 }
 
-static void init_mailbox(ClientMailbox *box)
+static void destroy_shared_region(void)
 {
-    if (sem_init(&box->empty, 1, 1) == -1) {
-        perror("sem_init(client mailbox empty)");
+    int i;
+    int nr_proc = g_shared->nr_proc;
+    size_t size = shared_region_size(nr_proc);
+
+    for (i = 0; i < nr_proc; i++) {
+        if (g_shared->slots[i].shm_name[0] != '\0') {
+            if (shm_unlink(g_shared->slots[i].shm_name) == -1) {
+                perror("shm_unlink");
+                exit(1);
+            }
+        }
+    }
+
+    for (i = 0; i < nr_proc; i++) {
+        if (sem_destroy(&g_shared->slots[i].empty) == -1) {
+            perror("sem_destroy(empty)");
+            exit(1);
+        }
+        if (sem_destroy(&g_shared->slots[i].full) == -1) {
+            perror("sem_destroy(full)");
+            exit(1);
+        }
+        if (sem_destroy(&g_shared->slots[i].consumed) == -1) {
+            perror("sem_destroy(consumed)");
+            exit(1);
+        }
+    }
+
+    if (sem_destroy(&g_shared->ready_sem) == -1) {
+        perror("sem_destroy(ready_sem)");
         exit(1);
     }
-    if (sem_init(&box->full, 1, 0) == -1) {
-        perror("sem_init(client mailbox full)");
+
+    if (sem_destroy(&g_shared->start_sem) == -1) {
+        perror("sem_destroy(start_sem)");
         exit(1);
     }
-    if (sem_init(&box->consumed, 1, 0) == -1) {
-        perror("sem_init(client mailbox consumed)");
+
+    if (munmap(g_shared, size) == -1) {
+        perror("munmap");
         exit(1);
     }
+
+    g_shared = NULL;
 }
 
-static void destroy_mailbox(ClientMailbox *box)
+static void create_process_segment(int rank)
 {
-    if (sem_destroy(&box->empty) == -1) {
-        perror("sem_destroy(client mailbox empty)");
+    int fd;
+    int written;
+    ProcessSlot *slot = &g_shared->slots[rank];
+
+    slot->pid = getpid();
+
+    written = snprintf(slot->shm_name, COM_SHM_NAME_LEN, "/%ld", (long)slot->pid);
+    if (written < 0 || written >= COM_SHM_NAME_LEN) {
+        fprintf(stderr, "segment name too long\n");
         exit(1);
     }
-    if (sem_destroy(&box->full) == -1) {
-        perror("sem_destroy(client mailbox full)");
+
+    fd = shm_open(slot->shm_name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (fd == -1) {
+        perror("shm_open(create own segment)");
         exit(1);
     }
-    if (sem_destroy(&box->consumed) == -1) {
-        perror("sem_destroy(client mailbox consumed)");
+
+    if (close(fd) == -1) {
+        perror("close(create own segment)");
         exit(1);
     }
 }
 
-static void create_message_shm(const void *message, size_t size, char name_out[COM_SHM_NAME_LEN])
+static void write_message_to_segment(const char *name, const void *message, size_t size)
 {
     int fd;
     void *mapping;
-    int written;
-   struct timeval tv;
 
-if (gettimeofday(&tv, NULL) == -1) {
-    perror("gettimeofday");
-    exit(1);
-}
-
-written = snprintf(name_out, COM_SHM_NAME_LEN,
-                   "/com_msg_%ld_%lu_%ld",
-                   (long)getpid(),
-                   g_msg_counter++,
-                   (long)tv.tv_usec);
-
-    fd = shm_open(name_out, O_CREAT | O_EXCL | O_RDWR, 0600);
+    fd = shm_open(name, O_RDWR, 0600);
     if (fd == -1) {
-        perror("shm_open(create)");
+        perror("shm_open(write)");
         exit(1);
     }
 
     if (ftruncate(fd, (off_t)size) == -1) {
-        int saved_errno = errno;
-        close(fd);
-        shm_unlink(name_out);
-        errno = saved_errno;
-        perror("ftruncate");
+        perror("ftruncate(write)");
         exit(1);
     }
 
     if (size > 0) {
         mapping = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (mapping == MAP_FAILED) {
-            int saved_errno = errno;
-            close(fd);
-            shm_unlink(name_out);
-            errno = saved_errno;
-            perror("mmap(message create)");
+            perror("mmap(write)");
             exit(1);
         }
 
         memcpy(mapping, message, size);
 
         if (munmap(mapping, size) == -1) {
-            int saved_errno = errno;
-            close(fd);
-            shm_unlink(name_out);
-            errno = saved_errno;
-            perror("munmap(message create)");
+            perror("munmap(write)");
             exit(1);
         }
     }
 
     if (close(fd) == -1) {
-        int saved_errno = errno;
-        shm_unlink(name_out);
-        errno = saved_errno;
-        perror("close(message create)");
+        perror("close(write)");
         exit(1);
     }
 }
 
-static void read_message_shm(const char *name, size_t size, void **message_out)
+static void read_message_from_segment(const char *name, size_t size, void **message_out)
 {
     int fd;
     void *mapping;
@@ -193,7 +226,6 @@ static void read_message_shm(const char *name, size_t size, void **message_out)
     if (size == 0) {
         copy = malloc(1);
         if (copy == NULL) {
-            close(fd);
             fprintf(stderr, "malloc failed\n");
             exit(1);
         }
@@ -201,7 +233,7 @@ static void read_message_shm(const char *name, size_t size, void **message_out)
         *message_out = copy;
 
         if (close(fd) == -1) {
-            perror("close(message read empty)");
+            perror("close(read empty)");
             exit(1);
         }
         return;
@@ -209,17 +241,12 @@ static void read_message_shm(const char *name, size_t size, void **message_out)
 
     mapping = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
     if (mapping == MAP_FAILED) {
-        int saved_errno = errno;
-        close(fd);
-        errno = saved_errno;
-        perror("mmap(message read)");
+        perror("mmap(read)");
         exit(1);
     }
 
     copy = malloc(size);
     if (copy == NULL) {
-        munmap(mapping, size);
-        close(fd);
         fprintf(stderr, "malloc failed\n");
         exit(1);
     }
@@ -227,257 +254,111 @@ static void read_message_shm(const char *name, size_t size, void **message_out)
     memcpy(copy, mapping, size);
 
     if (munmap(mapping, size) == -1) {
-        int saved_errno = errno;
-        free(copy);
-        close(fd);
-        errno = saved_errno;
-        perror("munmap(message read)");
+        perror("munmap(read)");
         exit(1);
     }
 
     if (close(fd) == -1) {
-        int saved_errno = errno;
-        free(copy);
-        errno = saved_errno;
-        perror("close(message read)");
+        perror("close(read)");
         exit(1);
     }
 
     *message_out = copy;
 }
 
-static void server_loop(void)
+void com_initialize(int nr_proc, int *rank)
 {
-    ServerMailbox *server_box = &g_shared->server_box;
+    int i;
 
-    for (;;) {
-        int dest_rank;
-        ClientMailbox *dest_box;
+    g_shared = create_shared_region(nr_proc);
 
-        sem_wait_checked(&server_box->full);
+    for (i = 0; i < nr_proc; i++) {
+        pid_t pid = fork();
 
-        dest_rank = server_box->dest_rank;
-        if (dest_rank == -1) {
-            break;
-        }
-
-        if (dest_rank < 0 || dest_rank >= USER_COUNT) {
-            fprintf(stderr, "server_loop: invalid destination rank\n");
+        if (pid == -1) {
+            perror("fork");
             exit(1);
         }
 
-        dest_box = &g_shared->inbox[dest_rank];
-        sem_wait_checked(&dest_box->empty);
+        if (pid == 0) {
+            g_rank = i;
+            create_process_segment(i);
+            sem_post_checked(&g_shared->ready_sem);
+            sem_wait_checked(&g_shared->start_sem);
+            *rank = i;
+            return;
+        }
 
-        dest_box->src_rank = server_box->src_rank;
-        dest_box->size = server_box->size;
-        memcpy(dest_box->shm_name, server_box->shm_name, COM_SHM_NAME_LEN);
-
-        sem_post_checked(&dest_box->full);
-        sem_wait_checked(&dest_box->consumed);
-        sem_post_checked(&server_box->delivered);
+        g_shared->slots[i].pid = pid;
     }
 
+    for (i = 0; i < nr_proc; i++) {
+        sem_wait_checked(&g_shared->ready_sem);
+    }
+
+    for (i = 0; i < nr_proc; i++) {
+        sem_post_checked(&g_shared->start_sem);
+    }
+
+    for (i = 0; i < nr_proc; i++) {
+        if (waitpid(g_shared->slots[i].pid, NULL, 0) == -1) {
+            perror("waitpid");
+            exit(1);
+        }
+    }
+
+    destroy_shared_region();
     _exit(0);
-}
-
-void com_initialize(int nr_proc, int *rank)
-{
-    if (rank == NULL) {
-        fprintf(stderr, "com_initialize: rank is NULL\n");
-        exit(1);
-    }
-
-    if (nr_proc != USER_COUNT) {
-        fprintf(stderr, "com_initialize: this minimal version supports exactly 2 user processes\n");
-        exit(1);
-    }
-
-    g_shared = create_shared_region(sizeof(SharedState));
-
-    if (sem_init(&g_shared->ctl.finalized_user, 1, 0) == -1) {
-        perror("sem_init(finalized_user)");
-        exit(1);
-    }
-
-    if (sem_init(&g_shared->server_box.empty, 1, 1) == -1) {
-        perror("sem_init(server mailbox empty)");
-        exit(1);
-    }
-    if (sem_init(&g_shared->server_box.full, 1, 0) == -1) {
-        perror("sem_init(server mailbox full)");
-        exit(1);
-    }
-    if (sem_init(&g_shared->server_box.delivered, 1, 0) == -1) {
-        perror("sem_init(server mailbox delivered)");
-        exit(1);
-    }
-
-    init_mailbox(&g_shared->inbox[0]);
-    init_mailbox(&g_shared->inbox[1]);
-
-    g_server_pid = fork();
-    if (g_server_pid == -1) {
-        perror("fork(server)");
-        exit(1);
-    }
-    if (g_server_pid == 0) {
-        g_rank = -1;
-        server_loop();
-    }
-
-    g_user1_pid = fork();
-    if (g_user1_pid == -1) {
-        perror("fork(user1)");
-        exit(1);
-    }
-    if (g_user1_pid == 0) {
-        g_rank = 1;
-        *rank = 1;
-        return;
-    }
-
-    g_rank = 0;
-    *rank = 0;
 }
 
 void com_send(int rank, void *msg, size_t size)
 {
-    char shm_name[COM_SHM_NAME_LEN];
-    ServerMailbox *server_box;
+    ProcessSlot *slot = &g_shared->slots[rank];
 
-    if (g_rank < 0) {
-        fprintf(stderr, "com_send: server cannot use user API\n");
-        exit(1);
-    }
-    if (rank < 0 || rank >= USER_COUNT) {
-        fprintf(stderr, "com_send: invalid destination rank\n");
-        exit(1);
-    }
-    if (rank == g_rank) {
-        fprintf(stderr, "com_send: sending to self is not supported\n");
-        exit(1);
-    }
-    if (size > 0 && msg == NULL) {
-        fprintf(stderr, "com_send: msg is NULL but size > 0\n");
-        exit(1);
-    }
+    sem_wait_checked(&slot->empty);
 
-    create_message_shm(msg, size, shm_name);
+    write_message_to_segment(slot->shm_name, msg, size);
 
-    server_box = &g_shared->server_box;
-    sem_wait_checked(&server_box->empty);
+    slot->src_rank = g_rank;
+    slot->size = size;
 
-    server_box->src_rank = g_rank;
-    server_box->dest_rank = rank;
-    server_box->size = size;
-    memcpy(server_box->shm_name, shm_name, COM_SHM_NAME_LEN);
-
-    sem_post_checked(&server_box->full);
-    sem_wait_checked(&server_box->delivered);
-    sem_post_checked(&server_box->empty);
-
-    if (shm_unlink(shm_name) == -1) {
-        perror("shm_unlink(message)");
-        exit(1);
-    }
+    sem_post_checked(&slot->full);
+    sem_wait_checked(&slot->consumed);
+    sem_post_checked(&slot->empty);
 }
 
 void com_recv(void **msg, size_t *size)
 {
-    ClientMailbox *box;
+    ProcessSlot *slot = &g_shared->slots[g_rank];
 
-    if (g_rank < 0) {
-        fprintf(stderr, "com_recv: server cannot use user API\n");
-        exit(1);
-    }
-    if (msg == NULL || size == NULL) {
-        fprintf(stderr, "com_recv: invalid arguments\n");
-        exit(1);
-    }
+    sem_wait_checked(&slot->full);
 
-    box = &g_shared->inbox[g_rank];
-    sem_wait_checked(&box->full);
+    *size = slot->size;
+    read_message_from_segment(slot->shm_name, slot->size, msg);
 
-    *size = box->size;
-    read_message_shm(box->shm_name, box->size, msg);
+    slot->src_rank = -1;
+    slot->size = 0;
 
-    box->src_rank = -1;
-    box->size = 0;
-    box->shm_name[0] = '\0';
-
-    sem_post_checked(&box->consumed);
-    sem_post_checked(&box->empty);
+    sem_post_checked(&slot->consumed);
 }
 
 void com_mcast(void *msg, size_t size)
 {
+    int i;
+
+    for (i = 0; i < g_shared->nr_proc; i++) {
+        if (i != g_rank) {
+            com_send(i, msg, size);
+        }
+    }
 }
 
 void com_finalize(void)
 {
-    ServerMailbox *server_box;
+    size_t size = shared_region_size(g_shared->nr_proc);
 
-    if (g_rank < 0) {
-        fprintf(stderr, "com_finalize: server cannot use user API\n");
-        exit(1);
-    }
-
-    if (g_rank == 1) {
-        sem_post_checked(&g_shared->ctl.finalized_user);
-
-        if (munmap(g_shared, sizeof(SharedState)) == -1) {
-            perror("munmap(shared child)");
-            exit(1);
-        }
-
-        g_shared = NULL;
-        return;
-    }
-
-    sem_wait_checked(&g_shared->ctl.finalized_user);
-
-    server_box = &g_shared->server_box;
-    sem_wait_checked(&server_box->empty);
-    server_box->src_rank = -1;
-    server_box->dest_rank = -1;
-    server_box->size = 0;
-    server_box->shm_name[0] = '\0';
-    sem_post_checked(&server_box->full);
-
-    if (waitpid(g_server_pid, NULL, 0) == -1) {
-        perror("waitpid(server)");
-        exit(1);
-    }
-
-    if (waitpid(g_user1_pid, NULL, 0) == -1) {
-        perror("waitpid(user1)");
-        exit(1);
-    }
-
-    if (sem_destroy(&g_shared->ctl.finalized_user) == -1) {
-        perror("sem_destroy(finalized_user)");
-        exit(1);
-    }
-
-    if (sem_destroy(&g_shared->server_box.empty) == -1) {
-        perror("sem_destroy(server mailbox empty)");
-        exit(1);
-    }
-    if (sem_destroy(&g_shared->server_box.full) == -1) {
-        perror("sem_destroy(server mailbox full)");
-        exit(1);
-    }
-    if (sem_destroy(&g_shared->server_box.delivered) == -1) {
-        perror("sem_destroy(server mailbox delivered)");
-        exit(1);
-    }
-
-    destroy_mailbox(&g_shared->inbox[0]);
-    destroy_mailbox(&g_shared->inbox[1]);
-
-    if (munmap(g_shared, sizeof(SharedState)) == -1) {
-        perror("munmap(shared parent)");
+    if (munmap(g_shared, size) == -1) {
+        perror("munmap");
         exit(1);
     }
 

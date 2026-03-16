@@ -2,91 +2,141 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
 
-static void fill_message(unsigned char *buf, size_t size)
+#define PROC_COUNT 4
+
+static void fill_message(unsigned char *buf, size_t size, int src)
 {
-    size_t i = 0;
-    for ( i = 0; i < size; i++) {
-        buf[i] = (unsigned char)( '0' + (i % 10));
+    size_t i;
+
+    for (i = 0; i < size; i++) {
+        buf[i] = (unsigned char)('A' + ((src + (int)i) % 26));
     }
 }
 
-static bool check_message(const unsigned char *buf, size_t size)
+static void print_message(const void *msg, size_t size)
 {
-    size_t i = 0;
-    for ( i = 0; i < size; i++) {
-        if (buf[i] != (unsigned char)('0' + (i % 10))) {
-            return false;
-        }
+    if (size > 0) {
+        fwrite(msg, 1, size, stdout);
     }
-    return true;
 }
 
 int main(void)
 {
     int rank;
-    size_t tests[] = {
-        0, 1, 2, 3, 7, 15, 16, 31, 32, 63, 64,
-        127, 128, 255, 256, 511, 512,
-        1023, 1024, 2048, 4096, 8192,
-        16384, 65536, 262144, 1048576, 9999999
-    };
-    size_t test_count = sizeof(tests) / sizeof(tests[0]);
+    void *msg;
+    size_t size;
 
-    com_initialize(2, &rank);
+    com_initialize(PROC_COUNT, &rank);
 
     if (rank == 0) {
-        size_t t = 0;
-        for ( t = 0; t < test_count; t++) {
-            size_t size = tests[t];
-            unsigned char *msg = NULL;
+        unsigned char *buffer;
 
-            if (size > 0) {
-                msg = malloc(size);
-                if (msg == NULL) {
-                    fprintf(stderr, "malloc failed on sender\n");
-                    exit(1);
-                }
-                fill_message(msg, size);
-            }
+        printf("Process 0: enter message size for process 1: ");
+        fflush(stdout);
 
-            com_send(1, msg, size);
-
-            free(msg);
-            printf("SEND OK size=%zu\n", size);
-            fflush(stdout);
+        if (scanf("%zu", &size) != 1) {
+            fprintf(stderr, "Failed to read size\n");
+            exit(1);
         }
-    } else {
-        size_t t = 0;
-        for ( t = 0; t < test_count; t++) {
-            void *msg = NULL;
-            size_t size = 0;
 
-            com_recv(&msg, &size);
-
-            if (size != tests[t]) {
-                fprintf(stderr, "FAIL: expected size %zu, got %zu\n", tests[t], size);
-                exit(1);
-            }
-
-            if (size > 0 && !check_message((unsigned char *)msg, size)) {
-                fprintf(stderr, "FAIL: content mismatch for size %zu\n", size);
-                free(msg);
-                exit(1);
-            }
-
-            printf("Message content: ");
-
-            if (size > 0 && size < 255) {
-                fwrite(msg, 1, size, stdout);
-            }
-
-            free(msg);
-            printf(" RECV OK size=%zu\n", size);
-            fflush(stdout);
+        buffer = malloc(size);
+        if (size > 0 && buffer == NULL) {
+            fprintf(stderr, "malloc failed\n");
+            exit(1);
         }
+
+        fill_message(buffer, size, rank);
+
+        printf("Process 0 sends to process 1 | size=%zu | message=", size);
+        print_message(buffer, size);
+        printf("\n");
+        fflush(stdout);
+
+        com_send(1, buffer, size);
+        free(buffer);
+    }
+    else if (rank == 1) {
+        unsigned char *buffer;
+
+        com_recv(&msg, &size);
+
+        printf("Process 1 received from process 0 | size=%zu | message=", size);
+        print_message(msg, size);
+        printf("\n");
+        fflush(stdout);
+
+        free(msg);
+
+        printf("Process 1: enter message size for process 2: ");
+        fflush(stdout);
+
+        if (scanf("%zu", &size) != 1) {
+            fprintf(stderr, "Failed to read size\n");
+            exit(1);
+        }
+
+        buffer = malloc(size);
+        if (size > 0 && buffer == NULL) {
+            fprintf(stderr, "malloc failed\n");
+            exit(1);
+        }
+
+        fill_message(buffer, size, rank);
+
+        printf("Process 1 sends to process 2 | size=%zu | message=", size);
+        print_message(buffer, size);
+        printf("\n");
+        fflush(stdout);
+
+        com_send(2, buffer, size);
+        free(buffer);
+    }
+    else if (rank == 2) {
+        unsigned char *buffer;
+
+        com_recv(&msg, &size);
+
+        printf("Process 2 received from process 1 | size=%zu | message=", size);
+        print_message(msg, size);
+        printf("\n");
+        fflush(stdout);
+
+        free(msg);
+
+        printf("Process 2: enter message size for process 3: ");
+        fflush(stdout);
+
+        if (scanf("%zu", &size) != 1) {
+            fprintf(stderr, "Failed to read size\n");
+            exit(1);
+        }
+
+        buffer = malloc(size);
+        if (size > 0 && buffer == NULL) {
+            fprintf(stderr, "malloc failed\n");
+            exit(1);
+        }
+
+        fill_message(buffer, size, rank);
+
+        printf("Process 2 sends to process 3 | size=%zu | message=", size);
+        print_message(buffer, size);
+        printf("\n");
+        fflush(stdout);
+
+        com_send(3, buffer, size);
+        free(buffer);
+    }
+    else if (rank == 3) {
+        com_recv(&msg, &size);
+
+        printf("Process 3 received from process 2 | size=%zu | message=", size);
+        print_message(msg, size);
+        printf("\n");
+        fflush(stdout);
+
+        free(msg);
     }
 
     com_finalize();
