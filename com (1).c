@@ -1,5 +1,5 @@
 #include "com.h"
-
+#include <errno.h>
 #include <fcntl.h>
 #include <semaphore.h>
 #include <stdio.h>
@@ -11,22 +11,27 @@
 
 #define COM_SHM_NAME_LEN 128
 
-/* CHANGED: mailbox used by the central server to receive send requests. */
+/* Central mailbox used by the router process.
+ * User processes place one send request here, and the server forwards
+ * only metadata into the destination inbox.
+ */
 typedef struct {
     sem_t empty;                /* Server request slot is free. */
     sem_t full;                 /* Server request slot contains a message. */
     sem_t delivered;            /* Server routed message into destination inbox. */
     int src_rank;               /* Sender rank. */
     int dest_rank;              /* Destination rank, -1 means server shutdown. */
-    int msg_id;                 /* CHANGED: unique id of one logical message. */
+    int msg_id;                 /* unique id of one logical message. */
     size_t size;                /* Message size in bytes. */
     char shm_name[COM_SHM_NAME_LEN]; /* Sender shm segment name. */
 } ServerMailbox;
 
-/* CHANGED:
- * - inbox metadata still lives here
- * - ack fields implement one direct acknowledgement mailbox per sender process
- * - sender waits for ack_full/ack_msg_id instead of making the server wait
+/* One process-owned slot in shared memory.
+ *
+ * The same structure serves three purposes:
+ * 1. inbox metadata for one incoming message,
+ * 2. direct acknowledgement slot for messages sent by this process,
+ * 3. information about the persistent shm segment owned by this process.
  */
 typedef struct {
     pid_t pid;                  /* Child PID of the user process. */
@@ -40,6 +45,7 @@ typedef struct {
     int ack_msg_id;             /* CHANGED: msg_id acknowledged for this sender. */
     size_t size;                /* Current message size in bytes. */
     size_t capacity;            /* Persistent shm capacity of this process segment. */
+    size_t prepared_size;       /* Information of current size of prepared shm */
     char shm_name[COM_SHM_NAME_LEN]; /* Persistent shm segment owned by this process. */
 } ProcessSlot;
 
@@ -56,8 +62,10 @@ typedef struct {
 } SharedState;
 
 static int g_rank = -1;
-static int g_next_msg_id = 1;   /* CHANGED: process-local counter for msg_id assignment. */
+static int g_next_msg_id = 1;   /* Local counter used to distinguish multiple sends from one process. */
 static SharedState *g_shared = NULL;
+static void *g_send_mapping = NULL; // local mapping shm of curr proces
+static size_t g_send_mapping_capacity = 0;
 
 static size_t shared_region_size(int nr_proc)
 {
@@ -139,6 +147,7 @@ static SharedState *create_shared_region(int nr_proc)
         shared->slots[i].ack_msg_id = 0;
         shared->slots[i].size = 0;
         shared->slots[i].capacity = 0;
+        shared->slots[i].prepared_size = 0;
         shared->slots[i].shm_name[0] = '\0';
 
         if (sem_init(&shared->slots[i].empty, 1, 1) == -1) {
@@ -167,11 +176,16 @@ static void destroy_shared_region(void)
     int i;
     int nr_proc = g_shared->nr_proc;
     size_t size = shared_region_size(nr_proc);
-
     for (i = 0; i < nr_proc; i++) {
         if (g_shared->slots[i].shm_name[0] != '\0') {
+            fprintf(stderr, "[DEBUG] unlink slot=%d pid=%ld name=%s\n",
+                    i,
+                    (long)g_shared->slots[i].pid,
+                    g_shared->slots[i].shm_name);
+
             if (shm_unlink(g_shared->slots[i].shm_name) == -1) {
                 perror("shm_unlink");
+                fprintf(stderr, "[DEBUG] errno=%d\n", errno);
                 exit(1);
             }
         }
@@ -256,7 +270,9 @@ static void create_process_segment(int rank)
     }
 }
 
-/* CHANGED: shm segment is grown only when the new message exceeds previous capacity. */
+/* The shm segment is reused between sends.
+ * We only grow it when a new message does not fit into the previous capacity.
+ */
 static void write_message_to_own_segment(int rank, const void *message, size_t size)
 {
     int fd;
@@ -353,7 +369,11 @@ static void read_message_from_segment(const char *name, size_t size, void **mess
     *message_out = copy;
 }
 
-/* CHANGED: dedicated router process only routes metadata and never waits for receiver read ack. */
+/* Router process.
+ * It copies only metadata from the central mailbox into the destination inbox.
+ * The router does not wait until the receiver reads the message; that acknowledgement
+ * is sent directly from receiver back to sender.
+ */
 static void server_loop(void)
 {
     ServerMailbox *server_box = &g_shared->server_box;
@@ -378,7 +398,7 @@ static void server_loop(void)
         sem_wait_checked(&dest_box->empty);
 
         dest_box->src_rank = server_box->src_rank;
-        dest_box->msg_id = server_box->msg_id;          /* CHANGED */
+        dest_box->msg_id = server_box->msg_id;
         dest_box->size = server_box->size;
         memcpy(dest_box->shm_name, server_box->shm_name, COM_SHM_NAME_LEN);
 
@@ -396,7 +416,7 @@ void com_initialize(int nr_proc, int *rank)
 
     g_shared = create_shared_region(nr_proc);
 
-    /* CHANGED: create the central router process. */
+    /* Start one dedicated router process before forking user processes. */
     pid = fork();
     if (pid == -1) {
         perror("fork(server)");
@@ -442,7 +462,7 @@ void com_initialize(int nr_proc, int *rank)
         }
     }
 
-    /* Server shutdown message is sent by the last user process in com_finalize(). */
+    /* The last finishing user process sends a shutdown sentinel to the router in com_finalize(). */
     if (waitpid(g_shared->server_pid, NULL, 0) == -1) {
         perror("waitpid(server)");
         exit(1);
@@ -452,23 +472,84 @@ void com_initialize(int nr_proc, int *rank)
     _exit(0);
 }
 
-/* CHANGED:
- * send via central router, then wait for a direct ack that includes msg_id.
- * This removes the old ambiguity of a plain consumed semaphore.
- */
-void com_send(int rank, void *msg, size_t size)
+void *com_prepare_send_buffer(size_t size)
 {
-    ServerMailbox *server_box = &g_shared->server_box;
-    ProcessSlot *my_slot = &g_shared->slots[g_rank];
-    int my_msg_id = g_next_msg_id++;                     /* CHANGED */
+    int fd;
+    ProcessSlot *slot = &g_shared->slots[g_rank];
 
-    write_message_to_own_segment(g_rank, msg, size);
+    fd = shm_open(slot->shm_name, O_RDWR, 0600);
+    if (fd == -1) {
+        perror("shm_open(prepare)");
+        exit(1);
+    }
+
+    if (size > slot->capacity) {
+        if (ftruncate(fd, (off_t)size) == -1) {
+            perror("ftruncate(prepare)");
+            exit(1);
+        }
+        slot->capacity = size;
+
+        if (g_send_mapping != NULL) {
+            if (munmap(g_send_mapping, g_send_mapping_capacity) == -1) {
+                perror("munmap(prepare)");
+                exit(1);
+            }
+            g_send_mapping = NULL;
+            g_send_mapping_capacity = 0;
+        }
+    }
+
+    if (size == 0) {
+        slot->prepared_size = 0;
+        if (close(fd) == -1) {
+            perror("close(prepare)");
+            exit(1);
+        }
+        return NULL;
+    }
+
+    if (g_send_mapping == NULL || g_send_mapping_capacity < size) {
+        g_send_mapping = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (g_send_mapping == MAP_FAILED) {
+            perror("mmap(prepare)");
+            exit(1);
+        }
+        g_send_mapping_capacity = size;
+    }
+
+    slot->prepared_size = size;
+
+    if (close(fd) == -1) {
+        perror("close(prepare)");
+        exit(1);
+    }
+
+    return g_send_mapping;
+}
+
+/* Send protocol:
+ * 1. the caller prepares payload in the sender-owned shm segment,
+ * 2. com_send places only metadata into the central router mailbox,
+ * 3. wait until the router confirms delivery into the receiver inbox,
+ * 4. wait for a direct acknowledgement from the receiver.
+ */
+void com_send(int rank, size_t size)
+{
+     ServerMailbox *server_box = &g_shared->server_box;
+    ProcessSlot *my_slot = &g_shared->slots[g_rank];
+    int my_msg_id = g_next_msg_id++;
+
+    if (my_slot->prepared_size != size) {
+        fprintf(stderr, "com_send: size mismatch\n");
+        exit(1);
+    }
 
     sem_wait_checked(&server_box->empty);
 
     server_box->src_rank = g_rank;
     server_box->dest_rank = rank;
-    server_box->msg_id = my_msg_id;                     /* CHANGED */
+    server_box->msg_id = my_msg_id;
     server_box->size = size;
     memcpy(server_box->shm_name, my_slot->shm_name, COM_SHM_NAME_LEN);
 
@@ -476,7 +557,6 @@ void com_send(int rank, void *msg, size_t size)
     sem_wait_checked(&server_box->delivered);
     sem_post_checked(&server_box->empty);
 
-    /* CHANGED: sender waits on its own ack slot instead of making server wait. */
     for (;;) {
         sem_wait_checked(&my_slot->ack_full);
 
@@ -487,11 +567,10 @@ void com_send(int rank, void *msg, size_t size)
             break;
         }
 
-        /* CHANGED: this should not happen with one outstanding send per process,
-         * but we keep the loop for defensive correctness.
-         */
         sem_post_checked(&my_slot->ack_empty);
     }
+
+    my_slot->prepared_size = 0;
 }
 
 void com_recv(void **msg, size_t *size)
@@ -504,7 +583,7 @@ void com_recv(void **msg, size_t *size)
     sem_wait_checked(&slot->full);
 
     sender_rank = slot->src_rank;
-    sender_msg_id = slot->msg_id;                       /* CHANGED */
+    sender_msg_id = slot->msg_id;
     *size = slot->size;
     read_message_from_segment(slot->shm_name, slot->size, msg);
 
@@ -513,7 +592,7 @@ void com_recv(void **msg, size_t *size)
     slot->size = 0;
     sem_post_checked(&slot->empty);
 
-    /* CHANGED: receiver sends a direct ack carrying msg_id back to sender. */
+    /* After copying the message locally, the receiver acknowledges exactly which message was read. */
     sender_slot = &g_shared->slots[sender_rank];
     sem_wait_checked(&sender_slot->ack_empty);
     sender_slot->ack_from_rank = g_rank;
@@ -524,10 +603,15 @@ void com_recv(void **msg, size_t *size)
 void com_mcast(void *msg, size_t size)
 {
     int i;
+    void *buf = com_prepare_send_buffer(size);
+
+    if (size > 0) {
+        memcpy(buf, msg, size);
+    }
 
     for (i = 0; i < g_shared->nr_proc; i++) {
         if (i != g_rank) {
-            com_send(i, msg, size);
+            com_send(i, size);
         }
     }
 }
@@ -537,7 +621,7 @@ void com_finalize(void)
     int is_last = 0;
     size_t size;
 
-    /* CHANGED: the last user process sends the router shutdown sentinel here. */
+    /* The last finishing user process sends a shutdown sentinel to stop the router. */
     sem_wait_checked(&g_shared->finalize_lock);
     g_shared->finalized_count++;
     if (g_shared->finalized_count == g_shared->nr_proc) {
@@ -549,11 +633,20 @@ void com_finalize(void)
         sem_wait_checked(&g_shared->server_box.empty);
         g_shared->server_box.src_rank = -1;
         g_shared->server_box.dest_rank = -1;
-        g_shared->server_box.msg_id = 0;               /* CHANGED */
+        g_shared->server_box.msg_id = 0;
         g_shared->server_box.size = 0;
         g_shared->server_box.shm_name[0] = '\0';
         sem_post_checked(&g_shared->server_box.full);
     }
+
+    if (g_send_mapping != NULL) {
+    if (munmap(g_send_mapping, g_send_mapping_capacity) == -1) {
+        perror("munmap(g_send_mapping)");
+        exit(1);
+    }
+    g_send_mapping = NULL;
+    g_send_mapping_capacity = 0;
+}
 
     size = shared_region_size(g_shared->nr_proc);
     if (munmap(g_shared, size) == -1) {

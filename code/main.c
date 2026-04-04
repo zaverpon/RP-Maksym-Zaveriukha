@@ -1,144 +1,207 @@
-#include "com.h"
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "com.h"
 
-#define PROC_COUNT 4
+#ifdef ENABLE_DEBUG
+#define DEBUG(arg) do { arg; } while (0)
+#else
+#define DEBUG(arg) do { } while (0)
+#endif
 
-static void fill_message(unsigned char *buf, size_t size, int src)
-{
-    size_t i;
+#define NS_PER_SEC 1000000000L
 
-    for (i = 0; i < size; i++) {
-        buf[i] = (unsigned char)('A' + ((src + (int)i) % 26));
+/* Prints correct usage and exits */
+static void die_usage(const char *prog) {
+    fprintf(stderr, "Usage: %s <num_processes> <message_size> <repeat_count>\n", prog);
+    exit(1);
+}
+
+/* Parses positive long value from string */
+static long parse_positive_long(const char *text, const char *name) {
+    char *end;
+    long val = strtol(text, &end, 10);
+    if (*end != '\0' || val <= 0) {
+        fprintf(stderr, "Invalid %s: %s\n", name, text);
+        exit(1);
+    }
+    return val;
+}
+
+/* Parses size_t value from string */
+static size_t parse_size_value(const char *text, const char *name) {
+    char *end;
+    unsigned long long val = strtoull(text, &end, 10);
+    if (*end != '\0') {
+        fprintf(stderr, "Invalid %s: %s\n", name, text);
+        exit(1);
+    }
+    return (size_t)val;
+}
+
+/* Computes elapsed time in seconds */
+static double elapsed_seconds(const struct timespec *start,
+                              const struct timespec *end) {
+    long sec = end->tv_sec - start->tv_sec;
+    long nsec = end->tv_nsec - start->tv_nsec;
+    return (double)sec + (double)nsec / NS_PER_SEC;
+}
+
+/* Fills buffer with predictable test pattern */
+static void fill_message(unsigned char *buf, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        buf[i] = 'A' + (i % 26);
     }
 }
 
-static void print_message(const void *msg, size_t size)
-{
-    if (size > 0) {
-        fwrite(msg, 1, size, stdout);
-    }
+/* Prints raw message content (for debug) */
+static void print_message_text(const void *msg, size_t size) {
+    fwrite(msg, 1, size, stdout);
 }
 
-int main(void)
-{
-    int rank;
-    void *msg;
-    size_t size;
+/* Prints benchmark summary (non-debug mode) */
+static void print_benchmark_summary(const char *name,
+                                    int proc,
+                                    size_t size,
+                                    long repeat,
+                                    long total,
+                                    double time) {
+    printf("[%s] proc=%d size=%zu repeat=%ld total=%ld time=%.6f s\n",
+           name, proc, size, repeat, total, time);
+}
 
-    com_initialize(PROC_COUNT, &rank);
+/* Scenario 1: process 0 sends message to all others */
+static void run_broadcast_only(int rank,
+                               int nr_proc,
+                               const unsigned char *buf,
+                               size_t size,
+                               long repeat) {
 
     if (rank == 0) {
-        unsigned char *buffer;
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
 
-        printf("Process 0: enter message size for process 1: ");
-        fflush(stdout);
-
-        if (scanf("%zu", &size) != 1) {
-            fprintf(stderr, "Failed to read size\n");
-            exit(1);
+        for (long i = 0; i < repeat; i++) {
+            for (int p = 1; p < nr_proc; p++) {
+                DEBUG(printf("[DEBUG] 0 -> %d\n", p));
+                com_send(p, (void *)buf, size);
+            }
         }
 
-        buffer = malloc(size);
-        if (size > 0 && buffer == NULL) {
-            fprintf(stderr, "malloc failed\n");
-            exit(1);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+
+        print_benchmark_summary("broadcast_only",
+                               nr_proc,
+                               size,
+                               repeat,
+                               repeat * (nr_proc - 1),
+                               elapsed_seconds(&start, &end));
+    } else {
+        for (long i = 0; i < repeat; i++) {
+            void *msg;
+            size_t sz;
+            com_recv(&msg, &sz);
+
+            DEBUG(printf("[DEBUG] %d received: ", rank));
+            DEBUG(print_message_text(msg, sz); printf("\n"));
+
+            free(msg);
         }
-
-        fill_message(buffer, size, rank);
-
-        printf("Process 0 sends to process 1 | size=%zu | message=", size);
-        print_message(buffer, size);
-        printf("\n");
-        fflush(stdout);
-
-        com_send(1, buffer, size);
-        free(buffer);
     }
-    else if (rank == 1) {
-        unsigned char *buffer;
+}
 
-        com_recv(&msg, &size);
+/* Scenario 2: process 0 sends and each process replies back */
+static void run_broadcast_and_return(int rank,
+                                      int nr_proc,
+                                      const unsigned char *buf,
+                                      size_t size,
+                                      long repeat) {
 
-        printf("Process 1 received from process 0 | size=%zu | message=", size);
-        print_message(msg, size);
-        printf("\n");
-        fflush(stdout);
+    if (rank == 0) {
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
 
-        free(msg);
+        for (long i = 0; i < repeat; i++) {
+            for (int p = 1; p < nr_proc; p++) {
+                /* send to one process */
+                com_send(p, (void *)buf, size);
 
-        printf("Process 1: enter message size for process 2: ");
-        fflush(stdout);
+                /* immediately receive reply to avoid deadlock */
+                void *reply;
+                size_t rsz;
+                com_recv(&reply, &rsz);
 
-        if (scanf("%zu", &size) != 1) {
-            fprintf(stderr, "Failed to read size\n");
-            exit(1);
+                DEBUG(printf("[DEBUG] reply from %d\n", p));
+
+                free(reply);
+            }
         }
 
-        buffer = malloc(size);
-        if (size > 0 && buffer == NULL) {
-            fprintf(stderr, "malloc failed\n");
-            exit(1);
+        clock_gettime(CLOCK_MONOTONIC, &end);
+
+        print_benchmark_summary("broadcast_and_return",
+                               nr_proc,
+                               size,
+                               repeat,
+                               repeat * (nr_proc - 1) * 2,
+                               elapsed_seconds(&start, &end));
+    } else {
+        for (long i = 0; i < repeat; i++) {
+            void *msg;
+            size_t sz;
+
+            /* receive message from process 0 */
+            com_recv(&msg, &sz);
+
+            DEBUG(printf("[DEBUG] %d got message, sending back\n", rank));
+
+            /* send same message back */
+            com_send(0, msg, sz);
+
+            free(msg);
         }
-
-        fill_message(buffer, size, rank);
-
-        printf("Process 1 sends to process 2 | size=%zu | message=", size);
-        print_message(buffer, size);
-        printf("\n");
-        fflush(stdout);
-
-        com_send(2, buffer, size);
-        free(buffer);
     }
-    else if (rank == 2) {
-        unsigned char *buffer;
+}
 
-        com_recv(&msg, &size);
+int main(int argc, char *argv[]) {
 
-        printf("Process 2 received from process 1 | size=%zu | message=", size);
-        print_message(msg, size);
-        printf("\n");
-        fflush(stdout);
-
-        free(msg);
-
-        printf("Process 2: enter message size for process 3: ");
-        fflush(stdout);
-
-        if (scanf("%zu", &size) != 1) {
-            fprintf(stderr, "Failed to read size\n");
-            exit(1);
-        }
-
-        buffer = malloc(size);
-        if (size > 0 && buffer == NULL) {
-            fprintf(stderr, "malloc failed\n");
-            exit(1);
-        }
-
-        fill_message(buffer, size, rank);
-
-        printf("Process 2 sends to process 3 | size=%zu | message=", size);
-        print_message(buffer, size);
-        printf("\n");
-        fflush(stdout);
-
-        com_send(3, buffer, size);
-        free(buffer);
-    }
-    else if (rank == 3) {
-        com_recv(&msg, &size);
-
-        printf("Process 3 received from process 2 | size=%zu | message=", size);
-        print_message(msg, size);
-        printf("\n");
-        fflush(stdout);
-
-        free(msg);
+    /* validate arguments */
+    if (argc != 4) {
+        die_usage(argv[0]);
     }
 
+    /* parse input values */
+    long nr_proc_l = parse_positive_long(argv[1], "num_processes");
+    size_t msg_size = parse_size_value(argv[2], "message_size");
+    long repeat = parse_positive_long(argv[3], "repeat_count");
+
+    if (nr_proc_l < 2) {
+        fprintf(stderr, "Need at least 2 processes\n");
+        return 1;
+    }
+
+    int nr_proc = (int)nr_proc_l;
+    int rank;
+
+    /* initialize communication system (forks processes) */
+    com_initialize(nr_proc, &rank);
+
+    /* allocate and prepare message buffer */
+    unsigned char *buf = malloc(msg_size > 0 ? msg_size : 1);
+    fill_message(buf, msg_size);
+
+    DEBUG(printf("[DEBUG] rank=%d started\n", rank));
+
+    /* run test scenarios */
+    run_broadcast_only(rank, nr_proc, buf, msg_size, repeat);
+    run_broadcast_and_return(rank, nr_proc, buf, msg_size, repeat);
+
+    /* cleanup */
+    free(buf);
     com_finalize();
+
     return 0;
 }

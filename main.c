@@ -1,10 +1,10 @@
-#include "com.h"
+#define _POSIX_C_SOURCE 200809L
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "com.h"
 
 #ifdef ENABLE_DEBUG
 #define DEBUG(arg) do { arg; } while (0)
@@ -14,284 +14,222 @@
 
 #define NS_PER_SEC 1000000000L
 
-static void die_usage(const char *prog)
-{
-    fprintf(stderr,
-            "Usage: %s <num_processes> <message_size> <repeat_count>\n",
-            prog);
+/* Prints correct usage and exits */
+static void die_usage(const char *prog) {
+    fprintf(stderr, "Usage: %s <num_processes> <message_size> <repeat_count>\n", prog);
     exit(1);
 }
 
-static long parse_positive_long(const char *text, const char *name)
-{
-    char *end = NULL;
-    long value;
-
-    errno = 0;
-    value = strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value <= 0) {
+/* Parses positive long value from string */
+static long parse_positive_long(const char *text, const char *name) {
+    char *end;
+    long val = strtol(text, &end, 10);
+    if (*end != '\0' || val <= 0) {
         fprintf(stderr, "Invalid %s: %s\n", name, text);
         exit(1);
     }
-
-    return value;
+    return val;
 }
 
-static size_t parse_size_value(const char *text, const char *name)
-{
-    char *end = NULL;
-    unsigned long long value;
-
-    errno = 0;
-    value = strtoull(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
+/* Parses size_t value from string */
+static size_t parse_size_value(const char *text, const char *name) {
+    char *end;
+    unsigned long long val = strtoull(text, &end, 10);
+    if (*end != '\0') {
         fprintf(stderr, "Invalid %s: %s\n", name, text);
         exit(1);
     }
-
-    return (size_t)value;
+    return (size_t)val;
 }
 
+/* Computes elapsed time in seconds */
 static double elapsed_seconds(const struct timespec *start,
-                              const struct timespec *end)
-{
+                              const struct timespec *end) {
     long sec = end->tv_sec - start->tv_sec;
     long nsec = end->tv_nsec - start->tv_nsec;
-
-    return (double)sec + (double)nsec / (double)NS_PER_SEC;
+    return (double)sec + (double)nsec / NS_PER_SEC;
 }
 
-static void fill_message(unsigned char *buf, size_t size)
-{
+/* Fills buffer with predictable test pattern */
+static void fill_message(unsigned char *buf, size_t size) {
     size_t i;
-
     for (i = 0; i < size; i++) {
-        buf[i] = (unsigned char)('A' + (int)(i % 26));
+        buf[i] = 'A' + (i % 26);
     }
 }
 
-static void print_message_text(const void *msg, size_t size)
-{
+/* Prints raw message content (for debug) */
+static void print_message_text(const void *msg, size_t size) {
+    fwrite(msg, 1, size, stdout);
+}
+
+/* Prints benchmark summary (non-debug mode) */
+static void print_benchmark_summary(const char *name,
+                                    int proc,
+                                    size_t size,
+                                    long repeat,
+                                    long total,
+                                    double time) {
+    printf("[%s] proc=%d size=%zu repeat=%ld total=%ld time=%.6f s\n",
+           name, proc, size, repeat, total, time);
+}
+
+/* Helper for new send API:
+ * prepare sender-owned shm buffer, fill it with predictable data, then send.
+ */
+static void send_prepared_pattern(int dest_rank, size_t size) {
+    unsigned char *send_buf = com_prepare_send_buffer(size);
+
+    if (size > 0 && send_buf == NULL) {
+        fprintf(stderr, "com_prepare_send_buffer returned NULL for non-zero size\n");
+        exit(1);
+    }
+
     if (size > 0) {
-        fwrite(msg, 1, size, stdout);
+        fill_message(send_buf, size);
     }
+
+    com_send(dest_rank, size);
 }
 
-static void print_benchmark_summary(const char *label,
-                                    int nr_proc,
-                                    size_t msg_size,
-                                    long repeat_count,
-                                    double seconds,
-                                    long total_messages)
-{
-    printf("[%s] status=OK proc=%d msg_size=%zu repeat=%ld total_messages=%ld time=%.6f s\n",
-           label,
-           nr_proc,
-           msg_size,
-           repeat_count,
-           total_messages,
-           seconds);
-    fflush(stdout);
+/* Helper for reply path:
+ * copy received message into prepared shm buffer, then send it.
+ */
+static void send_reply_copy(int dest_rank, const void *msg, size_t size) {
+    void *send_buf = com_prepare_send_buffer(size);
+
+    if (size > 0 && send_buf == NULL) {
+        fprintf(stderr, "com_prepare_send_buffer returned NULL for non-zero size\n");
+        exit(1);
+    }
+
+    if (size > 0) {
+        memcpy(send_buf, msg, size);
+    }
+
+    com_send(dest_rank, size);
 }
 
-/* CHANGED: scenario 1 -> process 0 broadcasts the same message to all others. */
+/* Scenario 1: process 0 sends message to all others */
 static void run_broadcast_only(int rank,
                                int nr_proc,
-                               const unsigned char *send_buffer,
-                               size_t msg_size,
-                               long repeat_count)
-{
-    long iter;
-    struct timespec start;
-    struct timespec end;
+                               size_t size,
+                               long repeat) {
+    long i;
+    int p;
 
     if (rank == 0) {
-        if (clock_gettime(CLOCK_MONOTONIC, &start) == -1) {
-            perror("clock_gettime(start scenario 1)");
-            exit(1);
-        }
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
 
-        for (iter = 0; iter < repeat_count; iter++) {
-            int dest;
-
-            DEBUG(printf("[DEBUG][broadcast_only] iteration=%ld sender=0 action=broadcast_begin\n", iter + 1););
-            for (dest = 1; dest < nr_proc; dest++) {
-                DEBUG(printf("[DEBUG][broadcast_only] iteration=%ld sender=0 receiver=%d size=%zu message=\"",
-                             iter + 1,
-                             dest,
-                             msg_size);
-                      print_message_text(send_buffer, msg_size);
-                      printf("\"\n"););;
-                com_send(dest, (void *)send_buffer, msg_size);
-                DEBUG(printf("[DEBUG][broadcast_only] iteration=%ld sender=0 receiver=%d status=sent_and_read\n",
-                             iter + 1,
-                             dest););
+        for (i = 0; i < repeat; i++) {
+            for (p = 1; p < nr_proc; p++) {
+                DEBUG(printf("[DEBUG] 0 -> %d\n", p));
+                send_prepared_pattern(p, size);
             }
         }
 
-        if (clock_gettime(CLOCK_MONOTONIC, &end) == -1) {
-            perror("clock_gettime(end scenario 1)");
-            exit(1);
-        }
+        clock_gettime(CLOCK_MONOTONIC, &end);
 
-#ifndef ENABLE_DEBUG
         print_benchmark_summary("broadcast_only",
                                 nr_proc,
-                                msg_size,
-                                repeat_count,
-                                elapsed_seconds(&start, &end),
-                                repeat_count * (long)(nr_proc - 1));
-#endif
-    }
-    else {
-        for (iter = 0; iter < repeat_count; iter++) {
-            void *recv_msg = NULL;
-            size_t recv_size = 0;
+                                size,
+                                repeat,
+                                repeat * (nr_proc - 1),
+                                elapsed_seconds(&start, &end));
+    } else {
+        for (i = 0; i < repeat; i++) {
+            void *msg;
+            size_t sz;
 
-            com_recv(&recv_msg, &recv_size);
-            DEBUG(printf("[DEBUG][broadcast_only] iteration=%ld receiver=%d sender=0 size=%zu received=\"",
-                         iter + 1,
-                         rank,
-                         recv_size);
-                  print_message_text(recv_msg, recv_size);
-                  printf("\"\n"););;
-            free(recv_msg);
+            com_recv(&msg, &sz);
+
+            DEBUG(printf("[DEBUG] %d received: ", rank));
+            DEBUG(print_message_text(msg, sz); printf("\n"));
+
+            free(msg);
         }
     }
 }
 
-/* CHANGED: scenario 2 -> process 0 broadcasts, then each receiver sends the same message back to process 0. */
+/* Scenario 2: process 0 sends and each process replies back */
 static void run_broadcast_and_return(int rank,
                                      int nr_proc,
-                                     const unsigned char *send_buffer,
-                                     size_t msg_size,
-                                     long repeat_count)
-{
-    long iter;
-    struct timespec start;
-    struct timespec end;
+                                     size_t size,
+                                     long repeat) {
+    long i;
+    int p;
 
     if (rank == 0) {
-        if (clock_gettime(CLOCK_MONOTONIC, &start) == -1) {
-            perror("clock_gettime(start scenario 2)");
-            exit(1);
-        }
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
 
-        for (iter = 0; iter < repeat_count; iter++) {
-            int peer;
+        for (i = 0; i < repeat; i++) {
+            for (p = 1; p < nr_proc; p++) {
+                /* send to one process */
+                send_prepared_pattern(p, size);
 
-            DEBUG(printf("[DEBUG][broadcast_return] iteration=%ld sender=0 action=broadcast_begin\n", iter + 1););
-            for (peer = 1; peer < nr_proc; peer++) {
-                DEBUG(printf("[DEBUG][broadcast_return] iteration=%ld sender=0 receiver=%d size=%zu message=\"",
-                             iter + 1,
-                             peer,
-                             msg_size);
-                      print_message_text(send_buffer, msg_size);
-                      printf("\"\n"););;
-                com_send(peer, (void *)send_buffer, msg_size);
-                DEBUG(printf("[DEBUG][broadcast_return] iteration=%ld sender=0 receiver=%d status=sent_and_read\n",
-                             iter + 1,
-                             peer););
-            }
+                /* immediately receive reply to avoid deadlock */
+                void *reply;
+                size_t rsz;
+                com_recv(&reply, &rsz);
 
-            for (peer = 1; peer < nr_proc; peer++) {
-                void *reply = NULL;
-                size_t reply_size = 0;
+                DEBUG(printf("[DEBUG] reply from %d\n", p));
 
-                com_recv(&reply, &reply_size);
-                DEBUG(printf("[DEBUG][broadcast_return] iteration=%ld sender=%d receiver=0 size=%zu reply=\"",
-                             iter + 1,
-                             peer,
-                             reply_size);
-                      print_message_text(reply, reply_size);
-                      printf("\"\n"););;
                 free(reply);
             }
         }
 
-        if (clock_gettime(CLOCK_MONOTONIC, &end) == -1) {
-            perror("clock_gettime(end scenario 2)");
-            exit(1);
-        }
+        clock_gettime(CLOCK_MONOTONIC, &end);
 
-#ifndef ENABLE_DEBUG
         print_benchmark_summary("broadcast_and_return",
                                 nr_proc,
-                                msg_size,
-                                repeat_count,
-                                elapsed_seconds(&start, &end),
-                                repeat_count * (long)(nr_proc - 1) * 2L);
-#endif
-    }
-    else {
-        for (iter = 0; iter < repeat_count; iter++) {
-            void *recv_msg = NULL;
-            size_t recv_size = 0;
+                                size,
+                                repeat,
+                                repeat * (nr_proc - 1) * 2,
+                                elapsed_seconds(&start, &end));
+    } else {
+        for (i = 0; i < repeat; i++) {
+            void *msg;
+            size_t sz;
 
-            com_recv(&recv_msg, &recv_size);
-            DEBUG(printf("[DEBUG][broadcast_return] iteration=%ld receiver=%d sender=0 size=%zu received=\"",
-                         iter + 1,
-                         rank,
-                         recv_size);
-                  print_message_text(recv_msg, recv_size);
-                  printf("\"\n"););;
+            /* receive message from process 0 */
+            com_recv(&msg, &sz);
 
-            com_send(0, recv_msg, recv_size);
-            DEBUG(printf("[DEBUG][broadcast_return] iteration=%ld sender=%d receiver=0 size=%zu status=returned_same_message\n",
-                         iter + 1,
-                         rank,
-                         recv_size););
-            free(recv_msg);
+            DEBUG(printf("[DEBUG] %d got message, sending back\n", rank));
+
+            /* send same message back */
+            send_reply_copy(0, msg, sz);
+
+            free(msg);
         }
     }
 }
 
-int main(int argc, char *argv[])
-{
-    long nr_proc_long;
-    long repeat_count;
-    size_t msg_size;
-    int nr_proc;
-    int rank;
-    unsigned char *buffer;
-
+int main(int argc, char *argv[]) {
     if (argc != 4) {
         die_usage(argv[0]);
     }
 
-    nr_proc_long = parse_positive_long(argv[1], "num_processes");
-    if (nr_proc_long < 2) {
-        fprintf(stderr, "num_processes must be at least 2\n");
+    long nr_proc_l = parse_positive_long(argv[1], "num_processes");
+    size_t msg_size = parse_size_value(argv[2], "message_size");
+    long repeat = parse_positive_long(argv[3], "repeat_count");
+
+    if (nr_proc_l < 2) {
+        fprintf(stderr, "Need at least 2 processes\n");
         return 1;
     }
 
-    msg_size = parse_size_value(argv[2], "message_size");
-    repeat_count = parse_positive_long(argv[3], "repeat_count");
-    nr_proc = (int)nr_proc_long;
+    int nr_proc = (int)nr_proc_l;
+    int rank;
 
     com_initialize(nr_proc, &rank);
 
-    buffer = NULL;
-    if (rank == 0 || rank > 0) {
-        buffer = malloc(msg_size > 0 ? msg_size : 1);
-        if (buffer == NULL) {
-            fprintf(stderr, "malloc failed\n");
-            exit(1);
-        }
-    }
+    DEBUG(printf("[DEBUG] rank=%d started\n", rank));
 
-    fill_message(buffer, msg_size);
+    run_broadcast_only(rank, nr_proc, msg_size, repeat);
+    run_broadcast_and_return(rank, nr_proc, msg_size, repeat);
 
-    DEBUG(printf("[DEBUG] process=%d started proc=%d msg_size=%zu repeat=%ld\n",
-                 rank,
-                 nr_proc,
-                 msg_size,
-                 repeat_count););
-
-    run_broadcast_only(rank, nr_proc, buffer, msg_size, repeat_count);
-    run_broadcast_and_return(rank, nr_proc, buffer, msg_size, repeat_count);
-
-    free(buffer);
     com_finalize();
     return 0;
 }
