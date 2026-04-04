@@ -1,5 +1,5 @@
 #include "com.h"
-
+#include <errno.h>
 #include <fcntl.h>
 #include <semaphore.h>
 #include <stdio.h>
@@ -45,6 +45,7 @@ typedef struct {
     int ack_msg_id;             /* CHANGED: msg_id acknowledged for this sender. */
     size_t size;                /* Current message size in bytes. */
     size_t capacity;            /* Persistent shm capacity of this process segment. */
+    size_t prepared_size;       /* Information of current size of prepared shm */
     char shm_name[COM_SHM_NAME_LEN]; /* Persistent shm segment owned by this process. */
 } ProcessSlot;
 
@@ -63,6 +64,8 @@ typedef struct {
 static int g_rank = -1;
 static int g_next_msg_id = 1;   /* Local counter used to distinguish multiple sends from one process. */
 static SharedState *g_shared = NULL;
+static void *g_send_mapping = NULL; // local mapping shm of curr proces
+static size_t g_send_mapping_capacity = 0;
 
 static size_t shared_region_size(int nr_proc)
 {
@@ -144,6 +147,7 @@ static SharedState *create_shared_region(int nr_proc)
         shared->slots[i].ack_msg_id = 0;
         shared->slots[i].size = 0;
         shared->slots[i].capacity = 0;
+        shared->slots[i].prepared_size = 0;
         shared->slots[i].shm_name[0] = '\0';
 
         if (sem_init(&shared->slots[i].empty, 1, 1) == -1) {
@@ -172,11 +176,16 @@ static void destroy_shared_region(void)
     int i;
     int nr_proc = g_shared->nr_proc;
     size_t size = shared_region_size(nr_proc);
-
     for (i = 0; i < nr_proc; i++) {
         if (g_shared->slots[i].shm_name[0] != '\0') {
+            fprintf(stderr, "[DEBUG] unlink slot=%d pid=%ld name=%s\n",
+                    i,
+                    (long)g_shared->slots[i].pid,
+                    g_shared->slots[i].shm_name);
+
             if (shm_unlink(g_shared->slots[i].shm_name) == -1) {
                 perror("shm_unlink");
+                fprintf(stderr, "[DEBUG] errno=%d\n", errno);
                 exit(1);
             }
         }
@@ -463,19 +472,78 @@ void com_initialize(int nr_proc, int *rank)
     _exit(0);
 }
 
+void *com_prepare_send_buffer(size_t size)
+{
+    int fd;
+    ProcessSlot *slot = &g_shared->slots[g_rank];
+
+    fd = shm_open(slot->shm_name, O_RDWR, 0600);
+    if (fd == -1) {
+        perror("shm_open(prepare)");
+        exit(1);
+    }
+
+    if (size > slot->capacity) {
+        if (ftruncate(fd, (off_t)size) == -1) {
+            perror("ftruncate(prepare)");
+            exit(1);
+        }
+        slot->capacity = size;
+
+        if (g_send_mapping != NULL) {
+            if (munmap(g_send_mapping, g_send_mapping_capacity) == -1) {
+                perror("munmap(prepare)");
+                exit(1);
+            }
+            g_send_mapping = NULL;
+            g_send_mapping_capacity = 0;
+        }
+    }
+
+    if (size == 0) {
+        slot->prepared_size = 0;
+        if (close(fd) == -1) {
+            perror("close(prepare)");
+            exit(1);
+        }
+        return NULL;
+    }
+
+    if (g_send_mapping == NULL || g_send_mapping_capacity < size) {
+        g_send_mapping = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (g_send_mapping == MAP_FAILED) {
+            perror("mmap(prepare)");
+            exit(1);
+        }
+        g_send_mapping_capacity = size;
+    }
+
+    slot->prepared_size = size;
+
+    if (close(fd) == -1) {
+        perror("close(prepare)");
+        exit(1);
+    }
+
+    return g_send_mapping;
+}
+
 /* Send protocol:
- * 1. write payload into the sender-owned shm segment,
- * 2. place metadata into the central router mailbox,
+ * 1. the caller prepares payload in the sender-owned shm segment,
+ * 2. com_send places only metadata into the central router mailbox,
  * 3. wait until the router confirms delivery into the receiver inbox,
  * 4. wait for a direct acknowledgement from the receiver.
  */
-void com_send(int rank, void *msg, size_t size)
+void com_send(int rank, size_t size)
 {
-    ServerMailbox *server_box = &g_shared->server_box;
+     ServerMailbox *server_box = &g_shared->server_box;
     ProcessSlot *my_slot = &g_shared->slots[g_rank];
     int my_msg_id = g_next_msg_id++;
 
-    write_message_to_own_segment(g_rank, msg, size);
+    if (my_slot->prepared_size != size) {
+        fprintf(stderr, "com_send: size mismatch\n");
+        exit(1);
+    }
 
     sem_wait_checked(&server_box->empty);
 
@@ -489,7 +557,6 @@ void com_send(int rank, void *msg, size_t size)
     sem_wait_checked(&server_box->delivered);
     sem_post_checked(&server_box->empty);
 
-    /* The sender waits on its own ack slot, so the router stays free for other traffic. */
     for (;;) {
         sem_wait_checked(&my_slot->ack_full);
 
@@ -500,12 +567,10 @@ void com_send(int rank, void *msg, size_t size)
             break;
         }
 
-        /* With the current benchmark each process has at most one outstanding send,
-         * so this branch should normally not be hit.
-         * The loop is kept for defensive correctness.
-         */
         sem_post_checked(&my_slot->ack_empty);
     }
+
+    my_slot->prepared_size = 0;
 }
 
 void com_recv(void **msg, size_t *size)
@@ -538,10 +603,15 @@ void com_recv(void **msg, size_t *size)
 void com_mcast(void *msg, size_t size)
 {
     int i;
+    void *buf = com_prepare_send_buffer(size);
+
+    if (size > 0) {
+        memcpy(buf, msg, size);
+    }
 
     for (i = 0; i < g_shared->nr_proc; i++) {
         if (i != g_rank) {
-            com_send(i, msg, size);
+            com_send(i, size);
         }
     }
 }
@@ -568,6 +638,15 @@ void com_finalize(void)
         g_shared->server_box.shm_name[0] = '\0';
         sem_post_checked(&g_shared->server_box.full);
     }
+
+    if (g_send_mapping != NULL) {
+    if (munmap(g_send_mapping, g_send_mapping_capacity) == -1) {
+        perror("munmap(g_send_mapping)");
+        exit(1);
+    }
+    g_send_mapping = NULL;
+    g_send_mapping_capacity = 0;
+}
 
     size = shared_region_size(g_shared->nr_proc);
     if (munmap(g_shared, size) == -1) {

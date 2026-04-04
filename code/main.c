@@ -52,7 +52,8 @@ static double elapsed_seconds(const struct timespec *start,
 
 /* Fills buffer with predictable test pattern */
 static void fill_message(unsigned char *buf, size_t size) {
-    for (size_t i = 0; i < size; i++) {
+    size_t i;
+    for (i = 0; i < size; i++) {
         buf[i] = 'A' + (i % 26);
     }
 }
@@ -73,36 +74,74 @@ static void print_benchmark_summary(const char *name,
            name, proc, size, repeat, total, time);
 }
 
+/* Helper for new send API:
+ * prepare sender-owned shm buffer, fill it with predictable data, then send.
+ */
+static void send_prepared_pattern(int dest_rank, size_t size) {
+    unsigned char *send_buf = com_prepare_send_buffer(size);
+
+    if (size > 0 && send_buf == NULL) {
+        fprintf(stderr, "com_prepare_send_buffer returned NULL for non-zero size\n");
+        exit(1);
+    }
+
+    if (size > 0) {
+        fill_message(send_buf, size);
+    }
+
+    com_send(dest_rank, size);
+}
+
+/* Helper for reply path:
+ * copy received message into prepared shm buffer, then send it.
+ */
+static void send_reply_copy(int dest_rank, const void *msg, size_t size) {
+    void *send_buf = com_prepare_send_buffer(size);
+
+    if (size > 0 && send_buf == NULL) {
+        fprintf(stderr, "com_prepare_send_buffer returned NULL for non-zero size\n");
+        exit(1);
+    }
+
+    if (size > 0) {
+        memcpy(send_buf, msg, size);
+    }
+
+    com_send(dest_rank, size);
+}
+
 /* Scenario 1: process 0 sends message to all others */
 static void run_broadcast_only(int rank,
                                int nr_proc,
-                               const unsigned char *buf,
                                size_t size,
                                long repeat) {
+    long i;
+    int p;
 
     if (rank == 0) {
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
 
-        for (long i = 0; i < repeat; i++) {
-            for (int p = 1; p < nr_proc; p++) {
+        for (i = 0; i < repeat; i++) {
+            for (p = 1; p < nr_proc; p++) {
                 DEBUG(printf("[DEBUG] 0 -> %d\n", p));
-                com_send(p, (void *)buf, size);
+                send_prepared_pattern(p, size);
             }
         }
 
         clock_gettime(CLOCK_MONOTONIC, &end);
 
         print_benchmark_summary("broadcast_only",
-                               nr_proc,
-                               size,
-                               repeat,
-                               repeat * (nr_proc - 1),
-                               elapsed_seconds(&start, &end));
+                                nr_proc,
+                                size,
+                                repeat,
+                                repeat * (nr_proc - 1),
+                                elapsed_seconds(&start, &end));
     } else {
-        for (long i = 0; i < repeat; i++) {
+        for (i = 0; i < repeat; i++) {
             void *msg;
             size_t sz;
+
             com_recv(&msg, &sz);
 
             DEBUG(printf("[DEBUG] %d received: ", rank));
@@ -115,19 +154,20 @@ static void run_broadcast_only(int rank,
 
 /* Scenario 2: process 0 sends and each process replies back */
 static void run_broadcast_and_return(int rank,
-                                      int nr_proc,
-                                      const unsigned char *buf,
-                                      size_t size,
-                                      long repeat) {
+                                     int nr_proc,
+                                     size_t size,
+                                     long repeat) {
+    long i;
+    int p;
 
     if (rank == 0) {
         struct timespec start, end;
         clock_gettime(CLOCK_MONOTONIC, &start);
 
-        for (long i = 0; i < repeat; i++) {
-            for (int p = 1; p < nr_proc; p++) {
+        for (i = 0; i < repeat; i++) {
+            for (p = 1; p < nr_proc; p++) {
                 /* send to one process */
-                com_send(p, (void *)buf, size);
+                send_prepared_pattern(p, size);
 
                 /* immediately receive reply to avoid deadlock */
                 void *reply;
@@ -143,13 +183,13 @@ static void run_broadcast_and_return(int rank,
         clock_gettime(CLOCK_MONOTONIC, &end);
 
         print_benchmark_summary("broadcast_and_return",
-                               nr_proc,
-                               size,
-                               repeat,
-                               repeat * (nr_proc - 1) * 2,
-                               elapsed_seconds(&start, &end));
+                                nr_proc,
+                                size,
+                                repeat,
+                                repeat * (nr_proc - 1) * 2,
+                                elapsed_seconds(&start, &end));
     } else {
-        for (long i = 0; i < repeat; i++) {
+        for (i = 0; i < repeat; i++) {
             void *msg;
             size_t sz;
 
@@ -159,7 +199,7 @@ static void run_broadcast_and_return(int rank,
             DEBUG(printf("[DEBUG] %d got message, sending back\n", rank));
 
             /* send same message back */
-            com_send(0, msg, sz);
+            send_reply_copy(0, msg, sz);
 
             free(msg);
         }
@@ -167,13 +207,10 @@ static void run_broadcast_and_return(int rank,
 }
 
 int main(int argc, char *argv[]) {
-
-    /* validate arguments */
     if (argc != 4) {
         die_usage(argv[0]);
     }
 
-    /* parse input values */
     long nr_proc_l = parse_positive_long(argv[1], "num_processes");
     size_t msg_size = parse_size_value(argv[2], "message_size");
     long repeat = parse_positive_long(argv[3], "repeat_count");
@@ -186,22 +223,13 @@ int main(int argc, char *argv[]) {
     int nr_proc = (int)nr_proc_l;
     int rank;
 
-    /* initialize communication system (forks processes) */
     com_initialize(nr_proc, &rank);
-
-    /* allocate and prepare message buffer */
-    unsigned char *buf = malloc(msg_size > 0 ? msg_size : 1);
-    fill_message(buf, msg_size);
 
     DEBUG(printf("[DEBUG] rank=%d started\n", rank));
 
-    /* run test scenarios */
-    run_broadcast_only(rank, nr_proc, buf, msg_size, repeat);
-    run_broadcast_and_return(rank, nr_proc, buf, msg_size, repeat);
+    run_broadcast_only(rank, nr_proc, msg_size, repeat);
+    run_broadcast_and_return(rank, nr_proc, msg_size, repeat);
 
-    /* cleanup */
-    free(buf);
     com_finalize();
-
     return 0;
 }
