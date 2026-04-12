@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -c -O2 -ansi -pedantic -Wall -DLINUX $(INCL)
+CFLAGS = -c -O2 -std=c11 -pedantic -Wall -DLINUX  $(INCL)
 LFLAGS =
 INCL = -I.
 LIBS =
@@ -15,9 +15,9 @@ libcom.a: com.o
 
 com.o: com.c com.h
 	$(CC) $(CFLAGS) com.c
-
+	
 main: main.o libcom.a
-	$(CC) main.o -L. -lcom -pthread -o main
+	$(CC) main.o -L. -lcom -pthread -lm -o main
 	
 
 main.o: main.c com.h

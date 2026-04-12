@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "com.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -46,7 +47,8 @@ typedef struct {
     size_t size;                /* Current message size in bytes. */
     size_t capacity;            /* Persistent shm capacity of this process segment. */
     size_t prepared_size;       /* Information of current size of prepared shm */
-    char shm_name[COM_SHM_NAME_LEN]; /* Persistent shm segment owned by this process. */
+    char own_shm_name[COM_SHM_NAME_LEN]; /* Persistent shm segment owned by this process. */
+    char inbox_shm_name[COM_SHM_NAME_LEN];
 } ProcessSlot;
 
 /* Global shared state inherited by all children after fork(). */
@@ -64,7 +66,7 @@ typedef struct {
 static int g_rank = -1;
 static int g_next_msg_id = 1;   /* Local counter used to distinguish multiple sends from one process. */
 static SharedState *g_shared = NULL;
-static void *g_send_mapping = NULL; // local mapping shm of curr proces
+static void *g_send_mapping = NULL; /* local mapping shm of curr proces*/
 static size_t g_send_mapping_capacity = 0;
 
 static size_t shared_region_size(int nr_proc)
@@ -148,7 +150,8 @@ static SharedState *create_shared_region(int nr_proc)
         shared->slots[i].size = 0;
         shared->slots[i].capacity = 0;
         shared->slots[i].prepared_size = 0;
-        shared->slots[i].shm_name[0] = '\0';
+        shared->slots[i].own_shm_name[0] = '\0';
+        shared->slots[i].inbox_shm_name[0] = '\0';
 
         if (sem_init(&shared->slots[i].empty, 1, 1) == -1) {
             perror("sem_init(empty)");
@@ -177,13 +180,13 @@ static void destroy_shared_region(void)
     int nr_proc = g_shared->nr_proc;
     size_t size = shared_region_size(nr_proc);
     for (i = 0; i < nr_proc; i++) {
-        if (g_shared->slots[i].shm_name[0] != '\0') {
-            fprintf(stderr, "[DEBUG] unlink slot=%d pid=%ld name=%s\n",
+        if (g_shared->slots[i].own_shm_name[0] != '\0') {
+            /*fprintf(stderr, "[DEBUG] unlink slot=%d pid=%ld name=%s\n",
                     i,
                     (long)g_shared->slots[i].pid,
-                    g_shared->slots[i].shm_name);
+                    g_shared->slots[i].own_shm_name);*/
 
-            if (shm_unlink(g_shared->slots[i].shm_name) == -1) {
+            if (shm_unlink(g_shared->slots[i].own_shm_name) == -1) {
                 perror("shm_unlink");
                 fprintf(stderr, "[DEBUG] errno=%d\n", errno);
                 exit(1);
@@ -252,13 +255,13 @@ static void create_process_segment(int rank)
     slot->pid = getpid();
     slot->capacity = 0;
 
-    written = snprintf(slot->shm_name, COM_SHM_NAME_LEN, "/%ld", (long)slot->pid);
+    written = snprintf(slot->own_shm_name, COM_SHM_NAME_LEN, "/%ld", (long)slot->pid);
     if (written < 0 || written >= COM_SHM_NAME_LEN) {
         fprintf(stderr, "segment name too long\n");
         exit(1);
     }
 
-    fd = shm_open(slot->shm_name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    fd = shm_open(slot->own_shm_name, O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd == -1) {
         perror("shm_open(create own segment)");
         exit(1);
@@ -279,7 +282,7 @@ static void write_message_to_own_segment(int rank, const void *message, size_t s
     void *mapping;
     ProcessSlot *slot = &g_shared->slots[rank];
 
-    fd = shm_open(slot->shm_name, O_RDWR, 0600);
+    fd = shm_open(slot->own_shm_name, O_RDWR, 0600);
     if (fd == -1) {
         perror("shm_open(write own segment)");
         exit(1);
@@ -400,7 +403,7 @@ static void server_loop(void)
         dest_box->src_rank = server_box->src_rank;
         dest_box->msg_id = server_box->msg_id;
         dest_box->size = server_box->size;
-        memcpy(dest_box->shm_name, server_box->shm_name, COM_SHM_NAME_LEN);
+        memcpy(dest_box->inbox_shm_name, server_box->shm_name, COM_SHM_NAME_LEN);
 
         sem_post_checked(&dest_box->full);
         sem_post_checked(&server_box->delivered);
@@ -477,7 +480,7 @@ void *com_prepare_send_buffer(size_t size)
     int fd;
     ProcessSlot *slot = &g_shared->slots[g_rank];
 
-    fd = shm_open(slot->shm_name, O_RDWR, 0600);
+    fd = shm_open(slot->own_shm_name, O_RDWR, 0600);
     if (fd == -1) {
         perror("shm_open(prepare)");
         exit(1);
@@ -551,7 +554,7 @@ void com_send(int rank, size_t size)
     server_box->dest_rank = rank;
     server_box->msg_id = my_msg_id;
     server_box->size = size;
-    memcpy(server_box->shm_name, my_slot->shm_name, COM_SHM_NAME_LEN);
+    memcpy(server_box->shm_name, my_slot->own_shm_name, COM_SHM_NAME_LEN);
 
     sem_post_checked(&server_box->full);
     sem_wait_checked(&server_box->delivered);
@@ -585,11 +588,12 @@ void com_recv(void **msg, size_t *size)
     sender_rank = slot->src_rank;
     sender_msg_id = slot->msg_id;
     *size = slot->size;
-    read_message_from_segment(slot->shm_name, slot->size, msg);
+    read_message_from_segment(slot->inbox_shm_name, slot->size, msg);
 
     slot->src_rank = -1;
     slot->msg_id = 0;
     slot->size = 0;
+
     sem_post_checked(&slot->empty);
 
     /* After copying the message locally, the receiver acknowledges exactly which message was read. */

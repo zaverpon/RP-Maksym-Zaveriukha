@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,9 +15,17 @@
 
 #define NS_PER_SEC 1000000000L
 
+typedef struct {
+    long n;
+    double mean;
+    double M2;
+} WelfordStats;
+
 /* Prints correct usage and exits */
 static void die_usage(const char *prog) {
-    fprintf(stderr, "Usage: %s <num_processes> <message_size> <repeat_count>\n", prog);
+    fprintf(stderr,
+            "Usage: %s <num_processes> <message_size> <repeat_count> <benchmark_runs>\n",
+            prog);
     exit(1);
 }
 
@@ -58,25 +67,37 @@ static void fill_message(unsigned char *buf, size_t size) {
     }
 }
 
-/* Prints raw message content (for debug) */
-static void print_message_text(const void *msg, size_t size) {
-    fwrite(msg, 1, size, stdout);
+/* Welford init */
+static void welford_init(WelfordStats *s) {
+    s->n = 0;
+    s->mean = 0.0;
+    s->M2 = 0.0;
 }
 
-/* Prints benchmark summary (non-debug mode) */
-static void print_benchmark_summary(const char *name,
-                                    int proc,
-                                    size_t size,
-                                    long repeat,
-                                    long total,
-                                    double time) {
-    printf("[%s] proc=%d size=%zu repeat=%ld total=%ld time=%.6f s\n",
-           name, proc, size, repeat, total, time);
+/* Welford online update */
+static void welford_update(WelfordStats *s, double x) {
+    double delta;
+    double delta2;
+
+    s->n++;
+    delta = x - s->mean;
+    s->mean += delta / (double)s->n;
+    delta2 = x - s->mean;
+    s->M2 += delta * delta2;
 }
 
-/* Helper for new send API:
- * prepare sender-owned shm buffer, fill it with predictable data, then send.
- */
+static double welford_sample_variance(const WelfordStats *s) {
+    if (s->n < 2) {
+        return 0.0;
+    }
+    return s->M2 / (double)(s->n - 1);
+}
+
+static double welford_stddev(const WelfordStats *s) {
+    return sqrt(welford_sample_variance(s));
+}
+
+/* prepare sender-owned shm buffer, fill it, then send */
 static void send_prepared_pattern(int dest_rank, size_t size) {
     unsigned char *send_buf = com_prepare_send_buffer(size);
 
@@ -92,9 +113,7 @@ static void send_prepared_pattern(int dest_rank, size_t size) {
     com_send(dest_rank, size);
 }
 
-/* Helper for reply path:
- * copy received message into prepared shm buffer, then send it.
- */
+/* copy received message into prepared shm buffer, then send */
 static void send_reply_copy(int dest_rank, const void *msg, size_t size) {
     void *send_buf = com_prepare_send_buffer(size);
 
@@ -110,126 +129,141 @@ static void send_reply_copy(int dest_rank, const void *msg, size_t size) {
     com_send(dest_rank, size);
 }
 
-/* Scenario 1: process 0 sends message to all others */
-static void run_broadcast_only(int rank,
-                               int nr_proc,
-                               size_t size,
-                               long repeat) {
+/* Single benchmark scenario:
+ * rank 0 performs ping-pong round-trips with every other process.
+ */
+static void run_ping_pong_benchmark(int rank,
+                                    int nr_proc,
+                                    size_t msg_size,
+                                    long repeat,
+                                    long benchmark_runs) {
+    long run;
     long i;
     int p;
 
     if (rank == 0) {
-        struct timespec start, end;
-        clock_gettime(CLOCK_MONOTONIC, &start);
+        WelfordStats stats;
+        welford_init(&stats);
 
-        for (i = 0; i < repeat; i++) {
-            for (p = 1; p < nr_proc; p++) {
-                DEBUG(printf("[DEBUG] 0 -> %d\n", p));
-                send_prepared_pattern(p, size);
+        for (run = 0; run < benchmark_runs; run++) {
+            struct timespec start, end;
+            double t;
+
+            DEBUG(printf("[MAIN] rank 0 starting benchmark run %ld\n", run));
+
+            clock_gettime(CLOCK_MONOTONIC, &start);
+
+            for (i = 0; i < repeat; i++) {
+                for (p = 1; p < nr_proc; p++) {
+                    void *reply;
+                    size_t reply_size;
+
+                    DEBUG(printf("[MAIN] run=%ld iter=%ld start ping-pong with rank %d size=%lu\n",
+                                 run, i, p, (unsigned long)msg_size));
+
+                    send_prepared_pattern(p, msg_size);
+
+                    DEBUG(printf("[MAIN] run=%ld iter=%ld waiting reply from rank %d\n",
+                                 run, i, p));
+
+                    com_recv(&reply, &reply_size);
+
+                    DEBUG(printf("[MAIN] run=%ld iter=%ld got reply from rank %d size=%lu\n",
+                                 run, i, p, (unsigned long)reply_size));
+
+                    free(reply);
+
+                    DEBUG(printf("[MAIN] run=%ld iter=%ld finished ping-pong with rank %d\n",
+                                 run, i, p));
+                }
             }
+
+            clock_gettime(CLOCK_MONOTONIC, &end);
+
+            t = elapsed_seconds(&start, &end);
+            welford_update(&stats, t);
+
+            DEBUG(printf("[MAIN] rank 0 finished benchmark run %ld time=%.6f s\n", run, t));
         }
 
-        clock_gettime(CLOCK_MONOTONIC, &end);
-
-        print_benchmark_summary("broadcast_only",
-                                nr_proc,
-                                size,
-                                repeat,
-                                repeat * (nr_proc - 1),
-                                elapsed_seconds(&start, &end));
+        printf("[ping_pong] proc=%d size=%lu repeat=%ld runs=%ld total_per_run=%ld "
+               "mean=%.6f s sample_variance=%.12f stddev=%.6f s\n",
+               nr_proc,
+               (unsigned long)msg_size,
+               repeat,
+               benchmark_runs,
+               repeat * (nr_proc - 1) * 2,
+               stats.mean,
+               welford_sample_variance(&stats),
+               welford_stddev(&stats));
     } else {
-        for (i = 0; i < repeat; i++) {
-            void *msg;
-            size_t sz;
+        for (run = 0; run < benchmark_runs; run++) {
+            DEBUG(printf("[MAIN] rank %d starting benchmark run %ld\n", rank, run));
 
-            com_recv(&msg, &sz);
+            for (i = 0; i < repeat; i++) {
+                void *msg;
+                size_t sz;
 
-            DEBUG(printf("[DEBUG] %d received: ", rank));
-            DEBUG(print_message_text(msg, sz); printf("\n"));
+                DEBUG(printf("[MAIN] rank %d run=%ld iter=%ld waiting request\n",
+                             rank, run, i));
 
-            free(msg);
-        }
-    }
-}
+                com_recv(&msg, &sz);
 
-/* Scenario 2: process 0 sends and each process replies back */
-static void run_broadcast_and_return(int rank,
-                                     int nr_proc,
-                                     size_t size,
-                                     long repeat) {
-    long i;
-    int p;
+                DEBUG(printf("[MAIN] rank %d run=%ld iter=%ld got request size=%lu, sending back\n",
+                             rank, run, i, (unsigned long)sz));
 
-    if (rank == 0) {
-        struct timespec start, end;
-        clock_gettime(CLOCK_MONOTONIC, &start);
+                send_reply_copy(0, msg, sz);
+                free(msg);
 
-        for (i = 0; i < repeat; i++) {
-            for (p = 1; p < nr_proc; p++) {
-                /* send to one process */
-                send_prepared_pattern(p, size);
-
-                /* immediately receive reply to avoid deadlock */
-                void *reply;
-                size_t rsz;
-                com_recv(&reply, &rsz);
-
-                DEBUG(printf("[DEBUG] reply from %d\n", p));
-
-                free(reply);
+                DEBUG(printf("[MAIN] rank %d run=%ld iter=%ld reply sent\n",
+                             rank, run, i));
             }
-        }
-
-        clock_gettime(CLOCK_MONOTONIC, &end);
-
-        print_benchmark_summary("broadcast_and_return",
-                                nr_proc,
-                                size,
-                                repeat,
-                                repeat * (nr_proc - 1) * 2,
-                                elapsed_seconds(&start, &end));
-    } else {
-        for (i = 0; i < repeat; i++) {
-            void *msg;
-            size_t sz;
-
-            /* receive message from process 0 */
-            com_recv(&msg, &sz);
-
-            DEBUG(printf("[DEBUG] %d got message, sending back\n", rank));
-
-            /* send same message back */
-            send_reply_copy(0, msg, sz);
-
-            free(msg);
         }
     }
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 4) {
+    long nr_proc_l;
+    size_t msg_size;
+    long repeat;
+    long benchmark_runs;
+    int nr_proc;
+    int rank;
+    struct timespec total_start, total_end;
+    double total_time;
+
+    if (argc != 5) {
         die_usage(argv[0]);
     }
 
-    long nr_proc_l = parse_positive_long(argv[1], "num_processes");
-    size_t msg_size = parse_size_value(argv[2], "message_size");
-    long repeat = parse_positive_long(argv[3], "repeat_count");
+    nr_proc_l = parse_positive_long(argv[1], "num_processes");
+    msg_size = parse_size_value(argv[2], "message_size");
+    repeat = parse_positive_long(argv[3], "repeat_count");
+    benchmark_runs = parse_positive_long(argv[4], "benchmark_runs");
 
     if (nr_proc_l < 2) {
         fprintf(stderr, "Need at least 2 processes\n");
         return 1;
     }
 
-    int nr_proc = (int)nr_proc_l;
-    int rank;
+    nr_proc = (int)nr_proc_l;
 
     com_initialize(nr_proc, &rank);
 
-    DEBUG(printf("[DEBUG] rank=%d started\n", rank));
+    DEBUG(printf("[MAIN] rank=%d started\n", rank));
 
-    run_broadcast_only(rank, nr_proc, msg_size, repeat);
-    run_broadcast_and_return(rank, nr_proc, msg_size, repeat);
+    clock_gettime(CLOCK_MONOTONIC, &total_start);
 
+    run_ping_pong_benchmark(rank, nr_proc, msg_size, repeat, benchmark_runs);
+
+    clock_gettime(CLOCK_MONOTONIC, &total_end);
+    total_time = elapsed_seconds(&total_start, &total_end);
+
+    if (rank == 0) {
+        printf("[program_total] time=%.6f s\n", total_time);
+    }
+
+    DEBUG(printf("[MAIN] rank=%d calling com_finalize()\n", rank));
     com_finalize();
     return 0;
 }
