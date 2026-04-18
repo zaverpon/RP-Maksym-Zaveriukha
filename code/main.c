@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,12 @@
 
 #define NS_PER_SEC 1000000000L
 
+/* Benchmark configuration */
+#define BENCHMARK_RUNS 10L
+#define TOTAL_BYTES_TARGET (1ULL * 1024ULL * 1024ULL)  
+#define MIN_REPEAT 5L
+#define MAX_REPEAT 5000L
+
 typedef struct {
     long n;
     double mean;
@@ -23,9 +30,8 @@ typedef struct {
 
 /* Prints correct usage and exits */
 static void die_usage(const char *prog) {
-    fprintf(stderr,
-            "Usage: %s <num_processes> <message_size> <repeat_count> <benchmark_runs>\n",
-            prog);
+    fprintf(stderr, "Usage: %s <num_processes> <message_size>\n", prog);
+    fprintf(stderr, "This benchmark currently supports exactly 2 processes.\n");
     exit(1);
 }
 
@@ -40,11 +46,11 @@ static long parse_positive_long(const char *text, const char *name) {
     return val;
 }
 
-/* Parses size_t value from string */
+/* Parses positive size_t value from string */
 static size_t parse_size_value(const char *text, const char *name) {
     char *end;
     unsigned long long val = strtoull(text, &end, 10);
-    if (*end != '\0') {
+    if (*end != '\0' || val == 0) {
         fprintf(stderr, "Invalid %s: %s\n", name, text);
         exit(1);
     }
@@ -97,6 +103,37 @@ static double welford_stddev(const WelfordStats *s) {
     return sqrt(welford_sample_variance(s));
 }
 
+/* Automatically choose repeat count so that one benchmark run transfers
+ * approximately TOTAL_BYTES_TARGET bytes in total, but keep it within
+ * practical limits.
+ *
+ * One roundtrip transfers:
+ *   msg_size bytes from rank 0 to rank 1
+ *   msg_size bytes from rank 1 to rank 0
+ * therefore 2 * msg_size bytes total.
+ */
+static long compute_repeat_count(size_t msg_size) {
+    unsigned long long bytes_per_roundtrip;
+    unsigned long long repeat;
+
+    bytes_per_roundtrip = 2ULL * (unsigned long long)msg_size;
+    repeat = TOTAL_BYTES_TARGET / bytes_per_roundtrip;
+
+    if (repeat < (unsigned long long)MIN_REPEAT) {
+        repeat = MIN_REPEAT;
+    }
+    if (repeat > (unsigned long long)MAX_REPEAT) {
+        repeat = MAX_REPEAT;
+    }
+    if (repeat > (unsigned long long)LONG_MAX) {
+        fprintf(stderr, "repeat_count overflow for message_size=%lu\n",
+                (unsigned long)msg_size);
+        exit(1);
+    }
+
+    return (long)repeat;
+}
+
 /* prepare sender-owned shm buffer, fill it, then send */
 static void send_prepared_pattern(int dest_rank, size_t size) {
     unsigned char *send_buf = com_prepare_send_buffer(size);
@@ -129,53 +166,47 @@ static void send_reply_copy(int dest_rank, const void *msg, size_t size) {
     com_send(dest_rank, size);
 }
 
-/* Single benchmark scenario:
- * rank 0 performs ping-pong round-trips with every other process.
+/* Benchmark scenario:
+ * Exactly 2 processes.
+ * Rank 0 performs roundtrips with rank 1:
+ *   send to 1 -> receive reply from 1
  */
-static void run_ping_pong_benchmark(int rank,
-                                    int nr_proc,
-                                    size_t msg_size,
-                                    long repeat,
-                                    long benchmark_runs) {
-    long run;
-    long i;
-    int p;
+static void run_roundtrip_benchmark_2proc(int rank, size_t msg_size) {
+    long repeat = compute_repeat_count(msg_size);
 
     if (rank == 0) {
         WelfordStats stats;
+        long run;
+
         welford_init(&stats);
 
-        for (run = 0; run < benchmark_runs; run++) {
+        for (run = 0; run < BENCHMARK_RUNS; run++) {
             struct timespec start, end;
             double t;
+            long i;
 
-            DEBUG(printf("[MAIN] rank 0 starting benchmark run %ld\n", run));
+            DEBUG(printf("[MAIN] rank 0 starting benchmark run %ld, size=%lu, repeat=%ld\n",
+                         run, (unsigned long)msg_size, repeat));
 
             clock_gettime(CLOCK_MONOTONIC, &start);
 
             for (i = 0; i < repeat; i++) {
-                for (p = 1; p < nr_proc; p++) {
-                    void *reply;
-                    size_t reply_size;
+                void *reply;
+                size_t reply_size;
 
-                    DEBUG(printf("[MAIN] run=%ld iter=%ld start ping-pong with rank %d size=%lu\n",
-                                 run, i, p, (unsigned long)msg_size));
+                send_prepared_pattern(1, msg_size);
+                com_recv(&reply, &reply_size);
 
-                    send_prepared_pattern(p, msg_size);
-
-                    DEBUG(printf("[MAIN] run=%ld iter=%ld waiting reply from rank %d\n",
-                                 run, i, p));
-
-                    com_recv(&reply, &reply_size);
-
-                    DEBUG(printf("[MAIN] run=%ld iter=%ld got reply from rank %d size=%lu\n",
-                                 run, i, p, (unsigned long)reply_size));
-
+                if (reply_size != msg_size) {
+                    fprintf(stderr,
+                            "Unexpected reply size: got %lu, expected %lu\n",
+                            (unsigned long)reply_size,
+                            (unsigned long)msg_size);
                     free(reply);
-
-                    DEBUG(printf("[MAIN] run=%ld iter=%ld finished ping-pong with rank %d\n",
-                                 run, i, p));
+                    exit(1);
                 }
+
+                free(reply);
             }
 
             clock_gettime(CLOCK_MONOTONIC, &end);
@@ -183,40 +214,71 @@ static void run_ping_pong_benchmark(int rank,
             t = elapsed_seconds(&start, &end);
             welford_update(&stats, t);
 
-            DEBUG(printf("[MAIN] rank 0 finished benchmark run %ld time=%.6f s\n", run, t));
+            DEBUG(printf("[MAIN] rank 0 finished run %ld, time=%.6f s\n", run, t));
         }
 
-        printf("[ping_pong] proc=%d size=%lu repeat=%ld runs=%ld total_per_run=%ld "
-               "mean=%.6f s sample_variance=%.12f stddev=%.6f s\n",
-               nr_proc,
-               (unsigned long)msg_size,
-               repeat,
-               benchmark_runs,
-               repeat * (nr_proc - 1) * 2,
-               stats.mean,
-               welford_sample_variance(&stats),
-               welford_stddev(&stats));
-    } else {
-        for (run = 0; run < benchmark_runs; run++) {
-            DEBUG(printf("[MAIN] rank %d starting benchmark run %ld\n", rank, run));
+        {
+            double mean_time = stats.mean;
+            double stddev_time = welford_stddev(&stats);
+            double total_bytes = 2.0 * (double)msg_size * (double)repeat;
+            double avg_roundtrip_us = (mean_time / (double)repeat) * 1e6;
+            double throughput_mib_s = total_bytes / mean_time / (1024.0 * 1024.0);
+
+            printf("[roundtrip_2proc] size=%lu repeat=%ld runs=%ld "
+                   "target_total_bytes=%llu mean=%.6f s stddev=%.6f s "
+                   "avg_roundtrip_us=%.3f throughput_mib_s=%.3f\n",
+                   (unsigned long)msg_size,
+                   repeat,
+                   BENCHMARK_RUNS,
+                   (unsigned long long)TOTAL_BYTES_TARGET,
+                   mean_time,
+                   stddev_time,
+                   avg_roundtrip_us,
+                   throughput_mib_s);
+
+            /* Easy-to-parse line for graph generation:
+             * 1=size
+             * 2=repeat
+             * 3=runs
+             * 4=target_total_bytes
+             * 5=mean_time_sec
+             * 6=stddev_time_sec
+             * 7=avg_roundtrip_us
+             * 8=throughput_mib_s
+             */
+            printf("[data] %lu %ld %ld %llu %.6f %.6f %.3f %.3f\n",
+                   (unsigned long)msg_size,
+                   repeat,
+                   BENCHMARK_RUNS,
+                   (unsigned long long)TOTAL_BYTES_TARGET,
+                   mean_time,
+                   stddev_time,
+                   avg_roundtrip_us,
+                   throughput_mib_s);
+        }
+    } else if (rank == 1) {
+        long run;
+
+        for (run = 0; run < BENCHMARK_RUNS; run++) {
+            long i;
 
             for (i = 0; i < repeat; i++) {
                 void *msg;
                 size_t sz;
 
-                DEBUG(printf("[MAIN] rank %d run=%ld iter=%ld waiting request\n",
-                             rank, run, i));
-
                 com_recv(&msg, &sz);
 
-                DEBUG(printf("[MAIN] rank %d run=%ld iter=%ld got request size=%lu, sending back\n",
-                             rank, run, i, (unsigned long)sz));
+                if (sz != msg_size) {
+                    fprintf(stderr,
+                            "Unexpected request size: got %lu, expected %lu\n",
+                            (unsigned long)sz,
+                            (unsigned long)msg_size);
+                    free(msg);
+                    exit(1);
+                }
 
                 send_reply_copy(0, msg, sz);
                 free(msg);
-
-                DEBUG(printf("[MAIN] rank %d run=%ld iter=%ld reply sent\n",
-                             rank, run, i));
             }
         }
     }
@@ -225,24 +287,20 @@ static void run_ping_pong_benchmark(int rank,
 int main(int argc, char *argv[]) {
     long nr_proc_l;
     size_t msg_size;
-    long repeat;
-    long benchmark_runs;
     int nr_proc;
     int rank;
     struct timespec total_start, total_end;
     double total_time;
 
-    if (argc != 5) {
+    if (argc != 3) {
         die_usage(argv[0]);
     }
 
     nr_proc_l = parse_positive_long(argv[1], "num_processes");
     msg_size = parse_size_value(argv[2], "message_size");
-    repeat = parse_positive_long(argv[3], "repeat_count");
-    benchmark_runs = parse_positive_long(argv[4], "benchmark_runs");
 
-    if (nr_proc_l < 2) {
-        fprintf(stderr, "Need at least 2 processes\n");
+    if (nr_proc_l != 2) {
+        fprintf(stderr, "This benchmark currently supports exactly 2 processes\n");
         return 1;
     }
 
@@ -254,7 +312,7 @@ int main(int argc, char *argv[]) {
 
     clock_gettime(CLOCK_MONOTONIC, &total_start);
 
-    run_ping_pong_benchmark(rank, nr_proc, msg_size, repeat, benchmark_runs);
+    run_roundtrip_benchmark_2proc(rank, msg_size);
 
     clock_gettime(CLOCK_MONOTONIC, &total_end);
     total_time = elapsed_seconds(&total_start, &total_end);
