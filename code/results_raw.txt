@@ -1,81 +1,255 @@
-[roundtrip_2proc] size=1 repeat=5000 runs=10 target_total_bytes=1048576 mean=0.565639 s stddev=0.111775 s avg_roundtrip_us=113.128 throughput_mib_s=0.017
-[data] 1 5000 10 1048576 0.565639 0.111775 113.128 0.017
-[program_total] time=5.656452 s
-[roundtrip_2proc] size=2 repeat=5000 runs=10 target_total_bytes=1048576 mean=0.533588 s stddev=0.104644 s avg_roundtrip_us=106.718 throughput_mib_s=0.036
-[data] 2 5000 10 1048576 0.533588 0.104644 106.718 0.036
-[program_total] time=5.335946 s
-[roundtrip_2proc] size=4 repeat=5000 runs=10 target_total_bytes=1048576 mean=0.535654 s stddev=0.085200 s avg_roundtrip_us=107.131 throughput_mib_s=0.071
-[data] 4 5000 10 1048576 0.535654 0.085200 107.131 0.071
-[program_total] time=5.356580 s
-[roundtrip_2proc] size=8 repeat=5000 runs=10 target_total_bytes=1048576 mean=0.522424 s stddev=0.074939 s avg_roundtrip_us=104.485 throughput_mib_s=0.146
-[data] 8 5000 10 1048576 0.522424 0.074939 104.485 0.146
-[program_total] time=5.224287 s
-[roundtrip_2proc] size=16 repeat=5000 runs=10 target_total_bytes=1048576 mean=0.505978 s stddev=0.044586 s avg_roundtrip_us=101.196 throughput_mib_s=0.302
-[data] 16 5000 10 1048576 0.505978 0.044586 101.196 0.302
-[program_total] time=5.059831 s
-[roundtrip_2proc] size=32 repeat=5000 runs=10 target_total_bytes=1048576 mean=0.560545 s stddev=0.116619 s avg_roundtrip_us=112.109 throughput_mib_s=0.544
-[data] 32 5000 10 1048576 0.560545 0.116619 112.109 0.544
-[program_total] time=5.605499 s
-[roundtrip_2proc] size=64 repeat=5000 runs=10 target_total_bytes=1048576 mean=0.561112 s stddev=0.134723 s avg_roundtrip_us=112.222 throughput_mib_s=1.088
-[data] 64 5000 10 1048576 0.561112 0.134723 112.222 1.088
-[program_total] time=5.611168 s
-[roundtrip_2proc] size=128 repeat=4096 runs=10 target_total_bytes=1048576 mean=0.501171 s stddev=0.084112 s avg_roundtrip_us=122.356 throughput_mib_s=1.995
-[data] 128 4096 10 1048576 0.501171 0.084112 122.356 1.995
-[program_total] time=5.011756 s
-[roundtrip_2proc] size=256 repeat=2048 runs=10 target_total_bytes=1048576 mean=0.222595 s stddev=0.053300 s avg_roundtrip_us=108.689 throughput_mib_s=4.492
-[data] 256 2048 10 1048576 0.222595 0.053300 108.689 4.492
-[program_total] time=2.225997 s
-[roundtrip_2proc] size=512 repeat=1024 runs=10 target_total_bytes=1048576 mean=0.101062 s stddev=0.018727 s avg_roundtrip_us=98.694 throughput_mib_s=9.895
-[data] 512 1024 10 1048576 0.101062 0.018727 98.694 9.895
-[program_total] time=1.010671 s
-[roundtrip_2proc] size=1024 repeat=512 runs=10 target_total_bytes=1048576 mean=0.038807 s stddev=0.013256 s avg_roundtrip_us=75.794 throughput_mib_s=25.769
-[data] 1024 512 10 1048576 0.038807 0.013256 75.794 25.769
-[program_total] time=0.388110 s
-[roundtrip_2proc] size=2048 repeat=256 runs=10 target_total_bytes=1048576 mean=0.017545 s stddev=0.003279 s avg_roundtrip_us=68.535 throughput_mib_s=56.997
-[data] 2048 256 10 1048576 0.017545 0.003279 68.535 56.997
-[program_total] time=0.175487 s
-[roundtrip_2proc] size=4096 repeat=128 runs=10 target_total_bytes=1048576 mean=0.006234 s stddev=0.000977 s avg_roundtrip_us=48.704 throughput_mib_s=160.408
-[data] 4096 128 10 1048576 0.006234 0.000977 48.704 160.408
-[program_total] time=0.062360 s
-[roundtrip_2proc] size=8192 repeat=64 runs=10 target_total_bytes=1048576 mean=0.003250 s stddev=0.000621 s avg_roundtrip_us=50.779 throughput_mib_s=307.708
-[data] 8192 64 10 1048576 0.003250 0.000621 50.779 307.708
-[program_total] time=0.032521 s
-[roundtrip_2proc] size=16384 repeat=32 runs=10 target_total_bytes=1048576 mean=0.003015 s stddev=0.000407 s avg_roundtrip_us=94.226 throughput_mib_s=331.649
-[data] 16384 32 10 1048576 0.003015 0.000407 94.226 331.649
-[program_total] time=0.030187 s
-[roundtrip_2proc] size=32768 repeat=16 runs=10 target_total_bytes=1048576 mean=0.002363 s stddev=0.000188 s avg_roundtrip_us=147.712 throughput_mib_s=423.121
-[data] 32768 16 10 1048576 0.002363 0.000188 147.712 423.121
-[program_total] time=0.023667 s
-[roundtrip_2proc] size=65536 repeat=8 runs=10 target_total_bytes=1048576 mean=0.002015 s stddev=0.000333 s avg_roundtrip_us=251.836 throughput_mib_s=496.355
-[data] 65536 8 10 1048576 0.002015 0.000333 251.836 496.355
-[program_total] time=0.020180 s
-[roundtrip_2proc] size=131072 repeat=5 runs=10 target_total_bytes=1048576 mean=0.001752 s stddev=0.000270 s avg_roundtrip_us=350.339 throughput_mib_s=713.595
-[data] 131072 5 10 1048576 0.001752 0.000270 350.339 713.595
-[program_total] time=0.017544 s
-[roundtrip_2proc] size=262144 repeat=5 runs=10 target_total_bytes=1048576 mean=0.003586 s stddev=0.000054 s avg_roundtrip_us=717.221 throughput_mib_s=697.135
-[data] 262144 5 10 1048576 0.003586 0.000054 717.221 697.135
-[program_total] time=0.035895 s
-[roundtrip_2proc] size=524288 repeat=5 runs=10 target_total_bytes=1048576 mean=0.006849 s stddev=0.000816 s avg_roundtrip_us=1369.794 throughput_mib_s=730.037
-[data] 524288 5 10 1048576 0.006849 0.000816 1369.794 730.037
-[program_total] time=0.068512 s
-[roundtrip_2proc] size=1048576 repeat=5 runs=10 target_total_bytes=1048576 mean=0.012462 s stddev=0.001606 s avg_roundtrip_us=2492.427 throughput_mib_s=802.431
-[data] 1048576 5 10 1048576 0.012462 0.001606 2492.427 802.431
-[program_total] time=0.124645 s
-[roundtrip_2proc] size=2097152 repeat=5 runs=10 target_total_bytes=1048576 mean=0.018499 s stddev=0.000837 s avg_roundtrip_us=3699.870 throughput_mib_s=1081.119
-[data] 2097152 5 10 1048576 0.018499 0.000837 3699.870 1081.119
-[program_total] time=0.185013 s
-[roundtrip_2proc] size=4194304 repeat=5 runs=10 target_total_bytes=1048576 mean=0.028624 s stddev=0.012242 s avg_roundtrip_us=5724.811 throughput_mib_s=1397.426
-[data] 4194304 5 10 1048576 0.028624 0.012242 5724.811 1397.426
-[program_total] time=0.286274 s
-[roundtrip_2proc] size=8388608 repeat=5 runs=10 target_total_bytes=1048576 mean=0.072814 s stddev=0.002223 s avg_roundtrip_us=14562.806 throughput_mib_s=1098.689
-[data] 8388608 5 10 1048576 0.072814 0.002223 14562.806 1098.689
-[program_total] time=0.728162 s
-[roundtrip_2proc] size=16777216 repeat=5 runs=10 target_total_bytes=1048576 mean=0.089937 s stddev=0.007756 s avg_roundtrip_us=17987.336 throughput_mib_s=1779.029
-[data] 16777216 5 10 1048576 0.089937 0.007756 17987.336 1779.029
-[program_total] time=0.899395 s
-[roundtrip_2proc] size=33554432 repeat=5 runs=10 target_total_bytes=1048576 mean=0.319896 s stddev=0.023508 s avg_roundtrip_us=63979.245 throughput_mib_s=1000.324
-[data] 33554432 5 10 1048576 0.319896 0.023508 63979.245 1000.324
-[program_total] time=3.198985 s
-[roundtrip_2proc] size=67108864 repeat=5 runs=10 target_total_bytes=1048576 mean=0.510909 s stddev=0.035416 s avg_roundtrip_us=102181.800 throughput_mib_s=1252.669
-[data] 67108864 5 10 1048576 0.510909 0.035416 102181.800 1252.669
-[program_total] time=5.109111 s
+===== repeat=10 =====
+[roundtrip_2proc] size=1 repeat=10 runs=10 mean=0.000445 s stddev=0.000129 s avg_roundtrip_us=44.525 throughput_mib_s=0.043
+[data] 1 10 10 0.000445 0.000129 44.525 0.043
+[program_total] time=0.004471 s
+[roundtrip_2proc] size=2 repeat=10 runs=10 mean=0.000220 s stddev=0.000027 s avg_roundtrip_us=22.031 throughput_mib_s=0.173
+[data] 2 10 10 0.000220 0.000027 22.031 0.173
+[program_total] time=0.002216 s
+[roundtrip_2proc] size=4 repeat=10 runs=10 mean=0.000582 s stddev=0.000139 s avg_roundtrip_us=58.213 throughput_mib_s=0.131
+[data] 4 10 10 0.000582 0.000139 58.213 0.131
+[program_total] time=0.005857 s
+[roundtrip_2proc] size=8 repeat=10 runs=10 mean=0.000199 s stddev=0.000023 s avg_roundtrip_us=19.859 throughput_mib_s=0.768
+[data] 8 10 10 0.000199 0.000023 19.859 0.768
+[program_total] time=0.001995 s
+[roundtrip_2proc] size=16 repeat=10 runs=10 mean=0.000498 s stddev=0.000057 s avg_roundtrip_us=49.803 throughput_mib_s=0.613
+[data] 16 10 10 0.000498 0.000057 49.803 0.613
+[program_total] time=0.005015 s
+[roundtrip_2proc] size=32 repeat=10 runs=10 mean=0.000386 s stddev=0.000041 s avg_roundtrip_us=38.569 throughput_mib_s=1.582
+[data] 32 10 10 0.000386 0.000041 38.569 1.582
+[program_total] time=0.003868 s
+[roundtrip_2proc] size=64 repeat=10 runs=10 mean=0.000307 s stddev=0.000023 s avg_roundtrip_us=30.735 throughput_mib_s=3.972
+[data] 64 10 10 0.000307 0.000023 30.735 3.972
+[program_total] time=0.003080 s
+[roundtrip_2proc] size=128 repeat=10 runs=10 mean=0.000450 s stddev=0.000022 s avg_roundtrip_us=44.985 throughput_mib_s=5.427
+[data] 128 10 10 0.000450 0.000022 44.985 5.427
+[program_total] time=0.004520 s
+[roundtrip_2proc] size=256 repeat=10 runs=10 mean=0.000229 s stddev=0.000012 s avg_roundtrip_us=22.945 throughput_mib_s=21.281
+[data] 256 10 10 0.000229 0.000012 22.945 21.281
+[program_total] time=0.002304 s
+[roundtrip_2proc] size=512 repeat=10 runs=10 mean=0.000388 s stddev=0.000092 s avg_roundtrip_us=38.802 throughput_mib_s=25.168
+[data] 512 10 10 0.000388 0.000092 38.802 25.168
+[program_total] time=0.003893 s
+[roundtrip_2proc] size=1024 repeat=10 runs=10 mean=0.000211 s stddev=0.000034 s avg_roundtrip_us=21.082 throughput_mib_s=92.643
+[data] 1024 10 10 0.000211 0.000034 21.082 92.643
+[program_total] time=0.002117 s
+[roundtrip_2proc] size=2048 repeat=10 runs=10 mean=0.000435 s stddev=0.000039 s avg_roundtrip_us=43.509 throughput_mib_s=89.781
+[data] 2048 10 10 0.000435 0.000039 43.509 89.781
+[program_total] time=0.004360 s
+[roundtrip_2proc] size=4096 repeat=10 runs=10 mean=0.000554 s stddev=0.000026 s avg_roundtrip_us=55.350 throughput_mib_s=141.147
+[data] 4096 10 10 0.000554 0.000026 55.350 141.147
+[program_total] time=0.005558 s
+[roundtrip_2proc] size=8192 repeat=10 runs=10 mean=0.000582 s stddev=0.000055 s avg_roundtrip_us=58.172 throughput_mib_s=268.600
+[data] 8192 10 10 0.000582 0.000055 58.172 268.600
+[program_total] time=0.005846 s
+[roundtrip_2proc] size=16384 repeat=10 runs=10 mean=0.000907 s stddev=0.000061 s avg_roundtrip_us=90.691 throughput_mib_s=344.575
+[data] 16384 10 10 0.000907 0.000061 90.691 344.575
+[program_total] time=0.009106 s
+[roundtrip_2proc] size=32768 repeat=10 runs=10 mean=0.000906 s stddev=0.000216 s avg_roundtrip_us=90.551 throughput_mib_s=690.218
+[data] 32768 10 10 0.000906 0.000216 90.551 690.218
+[program_total] time=0.009073 s
+[roundtrip_2proc] size=65536 repeat=10 runs=10 mean=0.001481 s stddev=0.000147 s avg_roundtrip_us=148.144 throughput_mib_s=843.771
+[data] 65536 10 10 0.001481 0.000147 148.144 843.771
+[program_total] time=0.014833 s
+[roundtrip_2proc] size=131072 repeat=10 runs=10 mean=0.002644 s stddev=0.000339 s avg_roundtrip_us=264.436 throughput_mib_s=945.409
+[data] 131072 10 10 0.002644 0.000339 264.436 945.409
+[program_total] time=0.026469 s
+[roundtrip_2proc] size=262144 repeat=10 runs=10 mean=0.007219 s stddev=0.001815 s avg_roundtrip_us=721.916 throughput_mib_s=692.602
+[data] 262144 10 10 0.007219 0.001815 721.916 692.602
+[program_total] time=0.072213 s
+[roundtrip_2proc] size=524288 repeat=10 runs=10 mean=0.017330 s stddev=0.003308 s avg_roundtrip_us=1732.959 throughput_mib_s=577.048
+[data] 524288 10 10 0.017330 0.003308 1732.959 577.048
+[program_total] time=0.173321 s
+[roundtrip_2proc] size=1048576 repeat=10 runs=10 mean=0.027520 s stddev=0.006201 s avg_roundtrip_us=2752.007 throughput_mib_s=726.742
+[data] 1048576 10 10 0.027520 0.006201 2752.007 726.742
+[program_total] time=0.275228 s
+[roundtrip_2proc] size=2097152 repeat=10 runs=10 mean=0.025813 s stddev=0.003014 s avg_roundtrip_us=2581.306 throughput_mib_s=1549.603
+[data] 2097152 10 10 0.025813 0.003014 2581.306 1549.603
+[program_total] time=0.258152 s
+[roundtrip_2proc] size=4194304 repeat=10 runs=10 mean=0.049583 s stddev=0.008105 s avg_roundtrip_us=4958.320 throughput_mib_s=1613.450
+[data] 4194304 10 10 0.049583 0.008105 4958.320 1613.450
+[program_total] time=0.495856 s
+[roundtrip_2proc] size=8388608 repeat=10 runs=10 mean=0.090969 s stddev=0.011850 s avg_roundtrip_us=9096.857 throughput_mib_s=1758.849
+[data] 8388608 10 10 0.090969 0.011850 9096.857 1758.849
+[program_total] time=0.909712 s
+[roundtrip_2proc] size=16777216 repeat=10 runs=10 mean=0.282250 s stddev=0.012519 s avg_roundtrip_us=28225.012 throughput_mib_s=1133.746
+[data] 16777216 10 10 0.282250 0.012519 28225.012 1133.746
+[program_total] time=2.822527 s
+[roundtrip_2proc] size=33554432 repeat=10 runs=10 mean=0.493875 s stddev=0.137770 s avg_roundtrip_us=49387.539 throughput_mib_s=1295.873
+[data] 33554432 10 10 0.493875 0.137770 49387.539 1295.873
+[program_total] time=4.938779 s
+[roundtrip_2proc] size=67108864 repeat=10 runs=10 mean=0.744882 s stddev=0.008976 s avg_roundtrip_us=74488.204 throughput_mib_s=1718.393
+[data] 67108864 10 10 0.744882 0.008976 74488.204 1718.393
+[program_total] time=7.448842 s
+[roundtrip_2proc] size=134217728 repeat=10 runs=10 mean=1.697198 s stddev=0.116757 s avg_roundtrip_us=169719.766 throughput_mib_s=1508.369
+[data] 134217728 10 10 1.697198 0.116757 169719.766 1508.369
+[program_total] time=16.971998 s
+===== repeat=100 =====
+[roundtrip_2proc] size=1 repeat=100 runs=10 mean=0.005109 s stddev=0.000243 s avg_roundtrip_us=51.085 throughput_mib_s=0.037
+[data] 1 100 10 0.005109 0.000243 51.085 0.037
+[program_total] time=0.051123 s
+[roundtrip_2proc] size=2 repeat=100 runs=10 mean=0.006697 s stddev=0.002834 s avg_roundtrip_us=66.970 throughput_mib_s=0.057
+[data] 2 100 10 0.006697 0.002834 66.970 0.057
+[program_total] time=0.067019 s
+[roundtrip_2proc] size=4 repeat=100 runs=10 mean=0.005218 s stddev=0.000410 s avg_roundtrip_us=52.180 throughput_mib_s=0.146
+[data] 4 100 10 0.005218 0.000410 52.180 0.146
+[program_total] time=0.052224 s
+[roundtrip_2proc] size=8 repeat=100 runs=10 mean=0.003735 s stddev=0.001347 s avg_roundtrip_us=37.348 throughput_mib_s=0.409
+[data] 8 100 10 0.003735 0.001347 37.348 0.409
+[program_total] time=0.037370 s
+[roundtrip_2proc] size=16 repeat=100 runs=10 mean=0.003725 s stddev=0.000748 s avg_roundtrip_us=37.246 throughput_mib_s=0.819
+[data] 16 100 10 0.003725 0.000748 37.246 0.819
+[program_total] time=0.037269 s
+[roundtrip_2proc] size=32 repeat=100 runs=10 mean=0.004351 s stddev=0.000334 s avg_roundtrip_us=43.507 throughput_mib_s=1.403
+[data] 32 100 10 0.004351 0.000334 43.507 1.403
+[program_total] time=0.043524 s
+[roundtrip_2proc] size=64 repeat=100 runs=10 mean=0.003049 s stddev=0.001091 s avg_roundtrip_us=30.488 throughput_mib_s=4.004
+[data] 64 100 10 0.003049 0.001091 30.488 4.004
+[program_total] time=0.030504 s
+[roundtrip_2proc] size=128 repeat=100 runs=10 mean=0.003345 s stddev=0.001071 s avg_roundtrip_us=33.453 throughput_mib_s=7.298
+[data] 128 100 10 0.003345 0.001071 33.453 7.298
+[program_total] time=0.033475 s
+[roundtrip_2proc] size=256 repeat=100 runs=10 mean=0.005176 s stddev=0.000832 s avg_roundtrip_us=51.759 throughput_mib_s=9.434
+[data] 256 100 10 0.005176 0.000832 51.759 9.434
+[program_total] time=0.051785 s
+[roundtrip_2proc] size=512 repeat=100 runs=10 mean=0.005024 s stddev=0.000205 s avg_roundtrip_us=50.237 throughput_mib_s=19.439
+[data] 512 100 10 0.005024 0.000205 50.237 19.439
+[program_total] time=0.050274 s
+[roundtrip_2proc] size=1024 repeat=100 runs=10 mean=0.004701 s stddev=0.000278 s avg_roundtrip_us=47.006 throughput_mib_s=41.551
+[data] 1024 100 10 0.004701 0.000278 47.006 41.551
+[program_total] time=0.047042 s
+[roundtrip_2proc] size=2048 repeat=100 runs=10 mean=0.005433 s stddev=0.000435 s avg_roundtrip_us=54.325 throughput_mib_s=71.905
+[data] 2048 100 10 0.005433 0.000435 54.325 71.905
+[program_total] time=0.054360 s
+[roundtrip_2proc] size=4096 repeat=100 runs=10 mean=0.006300 s stddev=0.001678 s avg_roundtrip_us=63.005 throughput_mib_s=123.999
+[data] 4096 100 10 0.006300 0.001678 63.005 123.999
+[program_total] time=0.063046 s
+[roundtrip_2proc] size=8192 repeat=100 runs=10 mean=0.008247 s stddev=0.000698 s avg_roundtrip_us=82.468 throughput_mib_s=189.467
+[data] 8192 100 10 0.008247 0.000698 82.468 189.467
+[program_total] time=0.082503 s
+[roundtrip_2proc] size=16384 repeat=100 runs=10 mean=0.007555 s stddev=0.000486 s avg_roundtrip_us=75.553 throughput_mib_s=413.616
+[data] 16384 100 10 0.007555 0.000486 75.553 413.616
+[program_total] time=0.075574 s
+[roundtrip_2proc] size=32768 repeat=100 runs=10 mean=0.018118 s stddev=0.003269 s avg_roundtrip_us=181.176 throughput_mib_s=344.969
+[data] 32768 100 10 0.018118 0.003269 181.176 344.969
+[program_total] time=0.181210 s
+[roundtrip_2proc] size=65536 repeat=100 runs=10 mean=0.022696 s stddev=0.002440 s avg_roundtrip_us=226.962 throughput_mib_s=550.753
+[data] 65536 100 10 0.022696 0.002440 226.962 550.753
+[program_total] time=0.226992 s
+[roundtrip_2proc] size=131072 repeat=100 runs=10 mean=0.040393 s stddev=0.005064 s avg_roundtrip_us=403.932 throughput_mib_s=618.915
+[data] 131072 100 10 0.040393 0.005064 403.932 618.915
+[program_total] time=0.403959 s
+[roundtrip_2proc] size=262144 repeat=100 runs=10 mean=0.054003 s stddev=0.013517 s avg_roundtrip_us=540.025 throughput_mib_s=925.883
+[data] 262144 100 10 0.054003 0.013517 540.025 925.883
+[program_total] time=0.540048 s
+[roundtrip_2proc] size=524288 repeat=100 runs=10 mean=0.074521 s stddev=0.024871 s avg_roundtrip_us=745.208 throughput_mib_s=1341.907
+[data] 524288 100 10 0.074521 0.024871 745.208 1341.907
+[program_total] time=0.745223 s
+[roundtrip_2proc] size=1048576 repeat=100 runs=10 mean=0.157756 s stddev=0.044903 s avg_roundtrip_us=1577.561 throughput_mib_s=1267.780
+[data] 1048576 100 10 0.157756 0.044903 1577.561 1267.780
+[program_total] time=1.577579 s
+[roundtrip_2proc] size=2097152 repeat=100 runs=10 mean=0.218630 s stddev=0.026168 s avg_roundtrip_us=2186.296 throughput_mib_s=1829.578
+[data] 2097152 100 10 0.218630 0.026168 2186.296 1829.578
+[program_total] time=2.186314 s
+[roundtrip_2proc] size=4194304 repeat=100 runs=10 mean=0.463857 s stddev=0.066623 s avg_roundtrip_us=4638.574 throughput_mib_s=1724.668
+[data] 4194304 100 10 0.463857 0.066623 4638.574 1724.668
+[program_total] time=4.638596 s
+[roundtrip_2proc] size=8388608 repeat=100 runs=10 mean=1.193140 s stddev=0.284701 s avg_roundtrip_us=11931.397 throughput_mib_s=1341.000
+[data] 8388608 100 10 1.193140 0.284701 11931.397 1341.000
+[program_total] time=11.931422 s
+[roundtrip_2proc] size=16777216 repeat=100 runs=10 mean=2.348908 s stddev=0.512714 s avg_roundtrip_us=23489.082 throughput_mib_s=1362.335
+[data] 16777216 100 10 2.348908 0.512714 23489.082 1362.335
+[program_total] time=23.489107 s
+[roundtrip_2proc] size=33554432 repeat=100 runs=10 mean=6.521757 s stddev=0.379634 s avg_roundtrip_us=65217.571 throughput_mib_s=981.331
+[data] 33554432 100 10 6.521757 0.379634 65217.571 981.331
+[program_total] time=65.217595 s
+[roundtrip_2proc] size=67108864 repeat=100 runs=10 mean=9.997231 s stddev=1.551264 s avg_roundtrip_us=99972.309 throughput_mib_s=1280.355
+[data] 67108864 100 10 9.997231 1.551264 99972.309 1280.355
+[program_total] time=99.972332 s
+[roundtrip_2proc] size=134217728 repeat=100 runs=10 mean=17.451246 s stddev=0.697348 s avg_roundtrip_us=174512.457 throughput_mib_s=1466.944
+[data] 134217728 100 10 17.451246 0.697348 174512.457 1466.944
+[program_total] time=174.512479 s
+===== repeat=1000 =====
+[roundtrip_2proc] size=1 repeat=1000 runs=10 mean=0.072389 s stddev=0.014925 s avg_roundtrip_us=72.389 throughput_mib_s=0.026
+[data] 1 1000 10 0.072389 0.014925 72.389 0.026
+[program_total] time=0.723958 s
+[roundtrip_2proc] size=2 repeat=1000 runs=10 mean=0.055229 s stddev=0.010260 s avg_roundtrip_us=55.229 throughput_mib_s=0.069
+[data] 2 1000 10 0.055229 0.010260 55.229 0.069
+[program_total] time=0.552330 s
+[roundtrip_2proc] size=4 repeat=1000 runs=10 mean=0.049143 s stddev=0.005070 s avg_roundtrip_us=49.143 throughput_mib_s=0.155
+[data] 4 1000 10 0.049143 0.005070 49.143 0.155
+[program_total] time=0.491469 s
+[roundtrip_2proc] size=8 repeat=1000 runs=10 mean=0.047071 s stddev=0.005597 s avg_roundtrip_us=47.071 throughput_mib_s=0.324
+[data] 8 1000 10 0.047071 0.005597 47.071 0.324
+[program_total] time=0.470756 s
+[roundtrip_2proc] size=16 repeat=1000 runs=10 mean=0.047215 s stddev=0.004010 s avg_roundtrip_us=47.215 throughput_mib_s=0.646
+[data] 16 1000 10 0.047215 0.004010 47.215 0.646
+[program_total] time=0.472188 s
+[roundtrip_2proc] size=32 repeat=1000 runs=10 mean=0.059890 s stddev=0.012619 s avg_roundtrip_us=59.890 throughput_mib_s=1.019
+[data] 32 1000 10 0.059890 0.012619 59.890 1.019
+[program_total] time=0.598936 s
+[roundtrip_2proc] size=64 repeat=1000 runs=10 mean=0.052943 s stddev=0.006987 s avg_roundtrip_us=52.943 throughput_mib_s=2.306
+[data] 64 1000 10 0.052943 0.006987 52.943 2.306
+[program_total] time=0.529473 s
+[roundtrip_2proc] size=128 repeat=1000 runs=10 mean=0.066551 s stddev=0.013267 s avg_roundtrip_us=66.551 throughput_mib_s=3.668
+[data] 128 1000 10 0.066551 0.013267 66.551 3.668
+[program_total] time=0.665562 s
+[roundtrip_2proc] size=256 repeat=1000 runs=10 mean=0.058866 s stddev=0.009849 s avg_roundtrip_us=58.866 throughput_mib_s=8.295
+[data] 256 1000 10 0.058866 0.009849 58.866 8.295
+[program_total] time=0.588680 s
+[roundtrip_2proc] size=512 repeat=1000 runs=10 mean=0.047960 s stddev=0.004474 s avg_roundtrip_us=47.960 throughput_mib_s=20.362
+[data] 512 1000 10 0.047960 0.004474 47.960 20.362
+[program_total] time=0.479635 s
+[roundtrip_2proc] size=1024 repeat=1000 runs=10 mean=0.056045 s stddev=0.008340 s avg_roundtrip_us=56.045 throughput_mib_s=34.849
+[data] 1024 1000 10 0.056045 0.008340 56.045 34.849
+[program_total] time=0.560494 s
+[roundtrip_2proc] size=2048 repeat=1000 runs=10 mean=0.056592 s stddev=0.004881 s avg_roundtrip_us=56.592 throughput_mib_s=69.024
+[data] 2048 1000 10 0.056592 0.004881 56.592 69.024
+[program_total] time=0.565962 s
+[roundtrip_2proc] size=4096 repeat=1000 runs=10 mean=0.061189 s stddev=0.006997 s avg_roundtrip_us=61.189 throughput_mib_s=127.679
+[data] 4096 1000 10 0.061189 0.006997 61.189 127.679
+[program_total] time=0.611923 s
+[roundtrip_2proc] size=8192 repeat=1000 runs=10 mean=0.059300 s stddev=0.006379 s avg_roundtrip_us=59.300 throughput_mib_s=263.492
+[data] 8192 1000 10 0.059300 0.006379 59.300 263.492
+[program_total] time=0.593030 s
+[roundtrip_2proc] size=16384 repeat=1000 runs=10 mean=0.073902 s stddev=0.007457 s avg_roundtrip_us=73.902 throughput_mib_s=422.857
+[data] 16384 1000 10 0.073902 0.007457 73.902 422.857
+[program_total] time=0.739056 s
+[roundtrip_2proc] size=32768 repeat=1000 runs=10 mean=0.093437 s stddev=0.004413 s avg_roundtrip_us=93.437 throughput_mib_s=668.901
+[data] 32768 1000 10 0.093437 0.004413 93.437 668.901
+[program_total] time=0.934386 s
+[roundtrip_2proc] size=65536 repeat=1000 runs=10 mean=0.138216 s stddev=0.013757 s avg_roundtrip_us=138.216 throughput_mib_s=904.380
+[data] 65536 1000 10 0.138216 0.013757 138.216 904.380
+[program_total] time=1.382183 s
+[roundtrip_2proc] size=131072 repeat=1000 runs=10 mean=0.235781 s stddev=0.035905 s avg_roundtrip_us=235.781 throughput_mib_s=1060.304
+[data] 131072 1000 10 0.235781 0.035905 235.781 1060.304
+[program_total] time=2.357832 s
+[roundtrip_2proc] size=262144 repeat=1000 runs=10 mean=0.423149 s stddev=0.107321 s avg_roundtrip_us=423.149 throughput_mib_s=1181.618
+[data] 262144 1000 10 0.423149 0.107321 423.149 1181.618
+[program_total] time=4.231506 s
+[roundtrip_2proc] size=524288 repeat=1000 runs=10 mean=0.673019 s stddev=0.064417 s avg_roundtrip_us=673.019 throughput_mib_s=1485.842
+[data] 524288 1000 10 0.673019 0.064417 673.019 1485.842
+[program_total] time=6.730210 s
+[roundtrip_2proc] size=1048576 repeat=1000 runs=10 mean=1.906404 s stddev=0.389798 s avg_roundtrip_us=1906.404 throughput_mib_s=1049.095
+[data] 1048576 1000 10 1.906404 0.389798 1906.404 1049.095
+[program_total] time=19.064061 s
+[roundtrip_2proc] size=2097152 repeat=1000 runs=10 mean=2.702630 s stddev=0.468621 s avg_roundtrip_us=2702.630 throughput_mib_s=1480.040
+[data] 2097152 1000 10 2.702630 0.468621 2702.630 1480.040
+[program_total] time=27.026315 s
+[roundtrip_2proc] size=4194304 repeat=1000 runs=10 mean=5.672365 s stddev=1.012371 s avg_roundtrip_us=5672.365 throughput_mib_s=1410.347
+[data] 4194304 1000 10 5.672365 1.012371 5672.365 1410.347
+[program_total] time=56.723665 s
+[roundtrip_2proc] size=8388608 repeat=1000 runs=10 mean=11.529301 s stddev=0.846917 s avg_roundtrip_us=11529.301 throughput_mib_s=1387.768
+[data] 8388608 1000 10 11.529301 0.846917 11529.301 1387.768
+[program_total] time=115.293033 s
+[roundtrip_2proc] size=16777216 repeat=1000 runs=10 mean=21.551116 s stddev=2.348023 s avg_roundtrip_us=21551.116 throughput_mib_s=1484.842
+[data] 16777216 1000 10 21.551116 2.348023 21551.116 1484.842
+[program_total] time=215.511185 s
+[roundtrip_2proc] size=33554432 repeat=1000 runs=10 mean=56.870366 s stddev=7.602251 s avg_roundtrip_us=56870.366 throughput_mib_s=1125.366
+[data] 33554432 1000 10 56.870366 7.602251 56870.366 1125.366
+[program_total] time=568.703684 s
+[roundtrip_2proc] size=67108864 repeat=1000 runs=10 mean=89.327119 s stddev=5.128233 s avg_roundtrip_us=89327.119 throughput_mib_s=1432.935
+[data] 67108864 1000 10 89.327119 5.128233 89327.119 1432.935
+[program_total] time=893.271276 s
+[roundtrip_2proc] size=134217728 repeat=1000 runs=10 mean=170.346226 s stddev=2.601577 s avg_roundtrip_us=170346.226 throughput_mib_s=1502.822
+[data] 134217728 1000 10 170.346226 2.601577 170346.226 1502.822
+[program_total] time=1703.462340 s

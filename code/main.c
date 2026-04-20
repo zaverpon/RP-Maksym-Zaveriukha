@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,12 +14,7 @@
 #endif
 
 #define NS_PER_SEC 1000000000L
-
-/* Benchmark configuration */
 #define BENCHMARK_RUNS 10L
-#define TOTAL_BYTES_TARGET (1ULL * 1024ULL * 1024ULL)  
-#define MIN_REPEAT 5L
-#define MAX_REPEAT 5000L
 
 typedef struct {
     long n;
@@ -30,7 +24,7 @@ typedef struct {
 
 /* Prints correct usage and exits */
 static void die_usage(const char *prog) {
-    fprintf(stderr, "Usage: %s <num_processes> <message_size>\n", prog);
+    fprintf(stderr, "Usage: %s <num_processes> <message_size> <repeat_count>\n", prog);
     fprintf(stderr, "This benchmark currently supports exactly 2 processes.\n");
     exit(1);
 }
@@ -103,37 +97,6 @@ static double welford_stddev(const WelfordStats *s) {
     return sqrt(welford_sample_variance(s));
 }
 
-/* Automatically choose repeat count so that one benchmark run transfers
- * approximately TOTAL_BYTES_TARGET bytes in total, but keep it within
- * practical limits.
- *
- * One roundtrip transfers:
- *   msg_size bytes from rank 0 to rank 1
- *   msg_size bytes from rank 1 to rank 0
- * therefore 2 * msg_size bytes total.
- */
-static long compute_repeat_count(size_t msg_size) {
-    unsigned long long bytes_per_roundtrip;
-    unsigned long long repeat;
-
-    bytes_per_roundtrip = 2ULL * (unsigned long long)msg_size;
-    repeat = TOTAL_BYTES_TARGET / bytes_per_roundtrip;
-
-    if (repeat < (unsigned long long)MIN_REPEAT) {
-        repeat = MIN_REPEAT;
-    }
-    if (repeat > (unsigned long long)MAX_REPEAT) {
-        repeat = MAX_REPEAT;
-    }
-    if (repeat > (unsigned long long)LONG_MAX) {
-        fprintf(stderr, "repeat_count overflow for message_size=%lu\n",
-                (unsigned long)msg_size);
-        exit(1);
-    }
-
-    return (long)repeat;
-}
-
 /* prepare sender-owned shm buffer, fill it, then send */
 static void send_prepared_pattern(int dest_rank, size_t size) {
     unsigned char *send_buf = com_prepare_send_buffer(size);
@@ -171,9 +134,9 @@ static void send_reply_copy(int dest_rank, const void *msg, size_t size) {
  * Rank 0 performs roundtrips with rank 1:
  *   send to 1 -> receive reply from 1
  */
-static void run_roundtrip_benchmark_2proc(int rank, size_t msg_size) {
-    long repeat = compute_repeat_count(msg_size);
-
+static void run_roundtrip_benchmark_2proc(int rank,
+                                          size_t msg_size,
+                                          long repeat) {
     if (rank == 0) {
         WelfordStats stats;
         long run;
@@ -225,12 +188,11 @@ static void run_roundtrip_benchmark_2proc(int rank, size_t msg_size) {
             double throughput_mib_s = total_bytes / mean_time / (1024.0 * 1024.0);
 
             printf("[roundtrip_2proc] size=%lu repeat=%ld runs=%ld "
-                   "target_total_bytes=%llu mean=%.6f s stddev=%.6f s "
+                   "mean=%.6f s stddev=%.6f s "
                    "avg_roundtrip_us=%.3f throughput_mib_s=%.3f\n",
                    (unsigned long)msg_size,
                    repeat,
                    BENCHMARK_RUNS,
-                   (unsigned long long)TOTAL_BYTES_TARGET,
                    mean_time,
                    stddev_time,
                    avg_roundtrip_us,
@@ -240,17 +202,15 @@ static void run_roundtrip_benchmark_2proc(int rank, size_t msg_size) {
              * 1=size
              * 2=repeat
              * 3=runs
-             * 4=target_total_bytes
-             * 5=mean_time_sec
-             * 6=stddev_time_sec
-             * 7=avg_roundtrip_us
-             * 8=throughput_mib_s
+             * 4=mean_time_sec
+             * 5=stddev_time_sec
+             * 6=avg_roundtrip_us
+             * 7=throughput_mib_s
              */
-            printf("[data] %lu %ld %ld %llu %.6f %.6f %.3f %.3f\n",
+            printf("[data] %lu %ld %ld %.6f %.6f %.3f %.3f\n",
                    (unsigned long)msg_size,
                    repeat,
                    BENCHMARK_RUNS,
-                   (unsigned long long)TOTAL_BYTES_TARGET,
                    mean_time,
                    stddev_time,
                    avg_roundtrip_us,
@@ -287,17 +247,19 @@ static void run_roundtrip_benchmark_2proc(int rank, size_t msg_size) {
 int main(int argc, char *argv[]) {
     long nr_proc_l;
     size_t msg_size;
+    long repeat;
     int nr_proc;
     int rank;
     struct timespec total_start, total_end;
     double total_time;
 
-    if (argc != 3) {
+    if (argc != 4) {
         die_usage(argv[0]);
     }
 
     nr_proc_l = parse_positive_long(argv[1], "num_processes");
     msg_size = parse_size_value(argv[2], "message_size");
+    repeat = parse_positive_long(argv[3], "repeat_count");
 
     if (nr_proc_l != 2) {
         fprintf(stderr, "This benchmark currently supports exactly 2 processes\n");
@@ -312,7 +274,7 @@ int main(int argc, char *argv[]) {
 
     clock_gettime(CLOCK_MONOTONIC, &total_start);
 
-    run_roundtrip_benchmark_2proc(rank, msg_size);
+    run_roundtrip_benchmark_2proc(rank, msg_size, repeat);
 
     clock_gettime(CLOCK_MONOTONIC, &total_end);
     total_time = elapsed_seconds(&total_start, &total_end);
