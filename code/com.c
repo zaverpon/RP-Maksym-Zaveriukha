@@ -10,6 +10,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifndef MAP_ANONYMOUS
+#ifdef MAP_ANON
+#define MAP_ANONYMOUS MAP_ANON
+#else
+#error "Neither MAP_ANONYMOUS nor MAP_ANON is available"
+#endif
+#endif
+
 #define COM_SHM_NAME_LEN 128
 
 /* Central mailbox used by the router process.
@@ -38,12 +46,18 @@ typedef struct {
     pid_t pid;                  /* Child PID of the user process. */
     sem_t empty;                /* Inbox is free and can accept metadata. */
     sem_t full;                 /* Inbox contains metadata for one message. */
-    sem_t ack_empty;            /* CHANGED: sender-side ack slot is free. */
-    sem_t ack_full;             /* CHANGED: sender-side ack slot contains one ack. */
+
+    sem_t ack_empty;            /* Kept for compatibility, not needed for broadcast ack counting. */
+    sem_t ack_full;             /* Counting semaphore: one post means one receiver freed the segment. */
+
     int src_rank;               /* Sender rank filled by the server. */
-    int msg_id;                 /* CHANGED: msg_id of the inbox message. */
-    int ack_from_rank;          /* CHANGED: rank of the receiver that produced the ack. */
-    int ack_msg_id;             /* CHANGED: msg_id acknowledged for this sender. */
+    int msg_id;                 /* msg_id of the inbox message. */
+
+    int ack_from_rank;          /* Kept for debugging / compatibility. */
+    int ack_msg_id;             /* Kept for debugging / compatibility. */
+
+    int pending_acks;           /* Number of receivers that still use this send segment. */
+
     size_t size;                /* Current message size in bytes. */
     size_t capacity;            /* Persistent shm capacity of this process segment. */
     size_t prepared_size;       /* Information of current size of prepared shm */
@@ -88,6 +102,28 @@ static void sem_post_checked(sem_t *sem)
         perror("sem_post");
         exit(1);
     }
+}
+
+/*
+ * Wait until all previous messages sent by this process were copied
+ * by their receivers.
+ *
+ * For broadcast, pending_acks can be greater than 1.
+ * ack_full works as a counting semaphore: every receiver posts it once
+ * after copying the message from this process-owned shm segment.
+ *
+ * This moves blocking from com_send() to com_prepare_send_buffer().
+ */
+static void wait_for_pending_acks(ProcessSlot *slot)
+{
+    while (slot->pending_acks > 0) {
+        sem_wait_checked(&slot->ack_full);
+        slot->pending_acks--;
+    }
+
+    slot->ack_msg_id = 0;
+    slot->ack_from_rank = -1;
+    slot->prepared_size = 0;
 }
 
 static SharedState *create_shared_region(int nr_proc)
@@ -145,8 +181,11 @@ static SharedState *create_shared_region(int nr_proc)
         shared->slots[i].pid = -1;
         shared->slots[i].src_rank = -1;
         shared->slots[i].msg_id = 0;
+
         shared->slots[i].ack_from_rank = -1;
         shared->slots[i].ack_msg_id = 0;
+        shared->slots[i].pending_acks = 0;
+
         shared->slots[i].size = 0;
         shared->slots[i].capacity = 0;
         shared->slots[i].prepared_size = 0;
@@ -161,10 +200,22 @@ static SharedState *create_shared_region(int nr_proc)
             perror("sem_init(full)");
             exit(1);
         }
+
+        /*
+         * ack_empty is no longer used as a strict one-ack slot lock,
+         * because broadcast needs multiple receivers to acknowledge
+         * without waiting for the sender to consume each ack immediately.
+         */
         if (sem_init(&shared->slots[i].ack_empty, 1, 1) == -1) {
             perror("sem_init(ack_empty)");
             exit(1);
         }
+
+        /*
+         * ack_full is now a counting semaphore.
+         * One sem_post means one receiver copied the message and freed
+         * this sender-owned segment for that receiver.
+         */
         if (sem_init(&shared->slots[i].ack_full, 1, 0) == -1) {
             perror("sem_init(ack_full)");
             exit(1);
@@ -179,6 +230,7 @@ static void destroy_shared_region(void)
     int i;
     int nr_proc = g_shared->nr_proc;
     size_t size = shared_region_size(nr_proc);
+
     for (i = 0; i < nr_proc; i++) {
         if (g_shared->slots[i].own_shm_name[0] != '\0') {
             /*fprintf(stderr, "[DEBUG] unlink slot=%d pid=%ld name=%s\n",
@@ -273,50 +325,6 @@ static void create_process_segment(int rank)
     }
 }
 
-/* The shm segment is reused between sends.
- * We only grow it when a new message does not fit into the previous capacity.
- */
-static void write_message_to_own_segment(int rank, const void *message, size_t size)
-{
-    int fd;
-    void *mapping;
-    ProcessSlot *slot = &g_shared->slots[rank];
-
-    fd = shm_open(slot->own_shm_name, O_RDWR, 0600);
-    if (fd == -1) {
-        perror("shm_open(write own segment)");
-        exit(1);
-    }
-
-    if (size > slot->capacity) {
-        if (ftruncate(fd, (off_t)size) == -1) {
-            perror("ftruncate(write own segment)");
-            exit(1);
-        }
-        slot->capacity = size;
-    }
-
-    if (size > 0) {
-        mapping = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (mapping == MAP_FAILED) {
-            perror("mmap(write own segment)");
-            exit(1);
-        }
-
-        memcpy(mapping, message, size);
-
-        if (munmap(mapping, size) == -1) {
-            perror("munmap(write own segment)");
-            exit(1);
-        }
-    }
-
-    if (close(fd) == -1) {
-        perror("close(write own segment)");
-        exit(1);
-    }
-}
-
 static void read_message_from_segment(const char *name, size_t size, void **message_out)
 {
     int fd;
@@ -406,6 +414,8 @@ static void server_loop(void)
         memcpy(dest_box->inbox_shm_name, server_box->shm_name, COM_SHM_NAME_LEN);
 
         sem_post_checked(&dest_box->full);
+
+        /* This confirms only metadata delivery, not payload reading. */
         sem_post_checked(&server_box->delivered);
     }
 
@@ -480,6 +490,13 @@ void *com_prepare_send_buffer(size_t size)
     int fd;
     ProcessSlot *slot = &g_shared->slots[g_rank];
 
+    /*
+     * Block here before reusing the send buffer.
+     * For broadcast, this waits until all receivers have copied
+     * the previous message from this sender-owned segment.
+     */
+    wait_for_pending_acks(slot);
+
     fd = shm_open(slot->own_shm_name, O_RDWR, 0600);
     if (fd == -1) {
         perror("shm_open(prepare)");
@@ -534,14 +551,21 @@ void *com_prepare_send_buffer(size_t size)
 /* Send protocol:
  * 1. the caller prepares payload in the sender-owned shm segment,
  * 2. com_send places only metadata into the central router mailbox,
- * 3. wait until the router confirms delivery into the receiver inbox,
- * 4. wait for a direct acknowledgement from the receiver.
+ * 3. wait until the router confirms delivery into the receiver inbox.
+ *
+ * com_send does not wait until the receiver reads the payload.
+ * That wait happens later in com_prepare_send_buffer().
  */
 void com_send(int rank, size_t size)
 {
-     ServerMailbox *server_box = &g_shared->server_box;
+    ServerMailbox *server_box = &g_shared->server_box;
     ProcessSlot *my_slot = &g_shared->slots[g_rank];
     int my_msg_id = g_next_msg_id++;
+
+    if (rank < 0 || rank >= g_shared->nr_proc) {
+        fprintf(stderr, "com_send: invalid destination rank\n");
+        exit(1);
+    }
 
     if (my_slot->prepared_size != size) {
         fprintf(stderr, "com_send: size mismatch\n");
@@ -557,23 +581,16 @@ void com_send(int rank, size_t size)
     memcpy(server_box->shm_name, my_slot->own_shm_name, COM_SHM_NAME_LEN);
 
     sem_post_checked(&server_box->full);
+
+    /* Wait only until metadata was placed into receiver inbox. */
     sem_wait_checked(&server_box->delivered);
     sem_post_checked(&server_box->empty);
 
-    for (;;) {
-        sem_wait_checked(&my_slot->ack_full);
-
-        if (my_slot->ack_msg_id == my_msg_id && my_slot->ack_from_rank == rank) {
-            my_slot->ack_msg_id = 0;
-            my_slot->ack_from_rank = -1;
-            sem_post_checked(&my_slot->ack_empty);
-            break;
-        }
-
-        sem_post_checked(&my_slot->ack_empty);
-    }
-
-    my_slot->prepared_size = 0;
+    /*
+     * One more receiver now uses this sender-owned shm segment.
+     * For broadcast, this counter grows once per destination.
+     */
+    my_slot->pending_acks++;
 }
 
 void com_recv(void **msg, size_t *size)
@@ -588,19 +605,29 @@ void com_recv(void **msg, size_t *size)
     sender_rank = slot->src_rank;
     sender_msg_id = slot->msg_id;
     *size = slot->size;
+
     read_message_from_segment(slot->inbox_shm_name, slot->size, msg);
 
     slot->src_rank = -1;
     slot->msg_id = 0;
     slot->size = 0;
+    slot->inbox_shm_name[0] = '\0';
 
     sem_post_checked(&slot->empty);
 
-    /* After copying the message locally, the receiver acknowledges exactly which message was read. */
+    /*
+     * After copying the message locally, the receiver frees sender's segment
+     * for this one message.
+     *
+     * For broadcast, several receivers can do this independently.
+     * Therefore we do not wait on ack_empty here.
+     * ack_full is used as a counting semaphore.
+     */
     sender_slot = &g_shared->slots[sender_rank];
-    sem_wait_checked(&sender_slot->ack_empty);
+
     sender_slot->ack_from_rank = g_rank;
     sender_slot->ack_msg_id = sender_msg_id;
+
     sem_post_checked(&sender_slot->ack_full);
 }
 
@@ -613,6 +640,13 @@ void com_mcast(void *msg, size_t size)
         memcpy(buf, msg, size);
     }
 
+    /*
+     * Broadcast/multicast uses the same sender-owned shm segment
+     * for all destinations.
+     *
+     * Each com_send() increases pending_acks by one.
+     * The segment can be reused only after all receivers acknowledge.
+     */
     for (i = 0; i < g_shared->nr_proc; i++) {
         if (i != g_rank) {
             com_send(i, size);
@@ -624,6 +658,16 @@ void com_finalize(void)
 {
     int is_last = 0;
     size_t size;
+    ProcessSlot *slot = &g_shared->slots[g_rank];
+
+    /*
+     * Before finalizing, wait until all receivers copied messages
+     * sent by this process.
+     *
+     * This is also necessary after broadcast, because one send segment
+     * can still be used by several receivers.
+     */
+    wait_for_pending_acks(slot);
 
     /* The last finishing user process sends a shutdown sentinel to stop the router. */
     sem_wait_checked(&g_shared->finalize_lock);
@@ -644,13 +688,13 @@ void com_finalize(void)
     }
 
     if (g_send_mapping != NULL) {
-    if (munmap(g_send_mapping, g_send_mapping_capacity) == -1) {
-        perror("munmap(g_send_mapping)");
-        exit(1);
+        if (munmap(g_send_mapping, g_send_mapping_capacity) == -1) {
+            perror("munmap(g_send_mapping)");
+            exit(1);
+        }
+        g_send_mapping = NULL;
+        g_send_mapping_capacity = 0;
     }
-    g_send_mapping = NULL;
-    g_send_mapping_capacity = 0;
-}
 
     size = shared_region_size(g_shared->nr_proc);
     if (munmap(g_shared, size) == -1) {
