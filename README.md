@@ -4,7 +4,7 @@ A C project implementing and benchmarking centralized inter-process communicatio
 
 The project explores communication between multiple processes through a central router and measures the performance of the communication layer under different workloads.
 
-## Technologies 
+## Project include 
 
 * Inter-process communication in C
 * POSIX shared memory
