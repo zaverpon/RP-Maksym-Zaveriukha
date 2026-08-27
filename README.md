@@ -4,7 +4,7 @@ A C project implementing and benchmarking centralized inter-process communicatio
 
 The project explores communication between multiple processes through a central router and measures the performance of the communication layer under different workloads.
 
-## Features
+## Technologies 
 
 * Inter-process communication in C
 * POSIX shared memory
@@ -15,33 +15,6 @@ The project explores communication between multiple processes through a central 
 * Centralized message routing
 * Performance benchmarking
 * Latency and throughput measurements
-
-## Project Structure
-
-```text
-.
-├── rpBenchmark1/
-│   ├── com.c
-│   ├── com.h
-│   ├── main.c
-│   ├── main.h
-│   ├── Makefile
-│   ├── latency_vs_size.pdf
-│   └── time_vs_size.pdf
-│
-├── rpBenchmark2/
-│   ├── com.c
-│   ├── com.h
-│   ├── main.c
-│   ├── main.h
-│   ├── Makefile
-│   ├── db_latency_vs_response_size.pdf
-│   ├── db_requests_per_second_vs_response_size.pdf
-│   └── db_response_throughput_vs_response_size.pdf
-│
-└── webRP/
-    └── supporting web materials
-```
 
 ## Communication Layer
 
